@@ -1,478 +1,385 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-  <meta charset="utf-8" />
-  <title>Sunset 4-Way Stop • Stable</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-
+  <title>Realistic 4-Way Stop with City</title>
+  <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
   <script>
-    /* ======================================================================
-       SYSTEM: TRAFFIC MANAGER (Central Logic)
-       ====================================================================== */
+    // --- Traffic Manager System ---
     AFRAME.registerSystem('traffic-manager', {
-      init() {
+      init: function () {
         this.queue = [];
         this.activeCars = [];
-        this.lastClearTime = 0;
-        this.minGap = 1200; 
-        // 4 Lanes: 0=N, 1=S, 2=E, 3=W
-        this.lanes = [[], [], [], []]; 
-      },
-
-      // --- Lane Management ---
-      registerCar(carEl, laneIdx) {
-        this.lanes[laneIdx].push(carEl);
-      },
-      unregisterCar(carEl, laneIdx) {
-        const idx = this.lanes[laneIdx].indexOf(carEl);
-        if (idx > -1) this.lanes[laneIdx].splice(idx, 1);
-        this.activeCars = this.activeCars.filter(c => c !== carEl);
-        const qIdx = this.queue.indexOf(carEl);
-        if (qIdx > -1) this.queue.splice(qIdx, 1);
-      },
-      getCarAhead(myEl, laneIdx) {
-        const idx = this.lanes[laneIdx].indexOf(myEl);
-        // Returns the car immediately in front in the array
-        if (idx > 0) return this.lanes[laneIdx][idx - 1];
-        return null;
-      },
-
-      // --- Intersection Logic ---
-      requestEntry(carEl) {
-        if (!this.queue.includes(carEl)) this.queue.push(carEl);
-      },
-      notifyClear(carEl) {
-        this.activeCars = this.activeCars.filter(c => c !== carEl);
-        if (this.activeCars.length === 0) this.lastClearTime = Date.now();
-      },
-      tick() {
-        const now = Date.now();
-        // If intersection clear & safety gap passed
-        if (this.queue.length > 0 && this.activeCars.length === 0 && (now - this.lastClearTime > this.minGap)) {
-            const car1 = this.queue[0];
-            if (!car1 || !car1.parentNode) { this.queue.shift(); return; }
-
-            const c1 = car1.components['car-logic'];
-            const batch = [car1];
-            this.queue.shift(); 
-
-            // Parallel Flow Check
-            if (this.queue.length > 0) {
-                const car2 = this.queue[0];
-                const c2 = car2.components['car-logic'];
-                const isOpposite = (c1.data.axis === c2.data.axis && c1.data.dir !== c2.data.dir);
-                const bothStraight = (c1.intention === 'straight' && c2.intention === 'straight');
-                
-                if (isOpposite && bothStraight) {
-                    batch.push(car2);
-                    this.queue.shift();
-                }
-            }
-
-            batch.forEach(c => {
-                this.activeCars.push(c);
-                c.emit('go-signal');
-            });
-        }
-      }
-    });
-
-    /* ======================================================================
-       SYSTEM: SPAWNER
-       ====================================================================== */
-    AFRAME.registerSystem('car-spawner', {
-      init() {
+        this.state = 'idle';
         this.timer = 0;
-        this.interval = 2000;
-        this.configs = [
-            { id:0, axis:'z', dir:-1, color:'#e74c3c' }, 
-            { id:1, axis:'z', dir: 1, color:'#3498db' },  
-            { id:2, axis:'x', dir: 1, color:'#f1c40f' },  
-            { id:3, axis:'x', dir:-1, color:'#9b59b6' }   
-        ];
-        this.idx = 0;
+        this.cycleTime = 3.0; // Time for one car/pair to cross
       },
-      tick(t, dt) {
-        this.timer += dt;
-        if (this.timer > this.interval) {
-            this.spawn();
+      register: function (car) {
+        this.queue.push(car);
+      },
+      unregister: function (car) {
+        const index = this.queue.indexOf(car);
+        if (index > -1) {
+          this.queue.splice(index, 1);
+        }
+        const activeIndex = this.activeCars.indexOf(car);
+        if (activeIndex > -1) {
+          this.activeCars.splice(activeIndex, 1);
+        }
+      },
+      tick: function (t, dt) {
+        if (this.state === 'crossing') {
+          this.timer += dt / 1000;
+          if (this.timer >= this.cycleTime) {
+            this.state = 'idle';
+            this.activeCars = [];
             this.timer = 0;
-            this.interval = 2500 + Math.random() * 1500;
+          }
         }
-      },
-      spawn() {
-        const cfg = this.configs[this.idx];
-        const el = document.createElement('a-entity');
-        // Sunset Palette Cars
-        const colors = [cfg.color, '#ecf0f1', '#2c3e50', '#c0392b', '#e67e22'];
-        const col = colors[Math.floor(Math.random()*colors.length)];
-        
-        el.setAttribute('car-logic', {
-            axis: cfg.axis, 
-            dir: cfg.dir, 
-            color: col,
-            laneId: cfg.id
-        });
-        this.el.appendChild(el);
-        this.idx = Math.floor(Math.random() * 4); // Random lane
+
+        if (this.state === 'idle' && this.queue.length > 0) {
+          let nextCar = this.queue[0];
+          if (nextCar.components['car-controller'].state === 'waiting') {
+            this.state = 'crossing';
+            this.activeCars.push(nextCar);
+            nextCar.components['car-controller'].go();
+            this.queue.shift();
+
+            // Check for opposite car for parallel crossing
+            if (this.queue.length > 0) {
+              let oppositeCar = this.queue[0];
+              if (oppositeCar.components['car-controller'].state === 'waiting' &&
+                  oppositeCar.components['car-controller'].data.axis === nextCar.components['car-controller'].data.axis &&
+                  oppositeCar.components['car-controller'].data.dir !== nextCar.components['car-controller'].data.dir &&
+                  nextCar.components['car-controller'].intention === 'straight' &&
+                  oppositeCar.components['car-controller'].intention === 'straight') {
+                this.activeCars.push(oppositeCar);
+                oppositeCar.components['car-controller'].go();
+                this.queue.shift();
+              }
+            }
+          }
+        }
       }
     });
 
-    /* ======================================================================
-       COMPONENT: CAR LOGIC
-       ====================================================================== */
-    AFRAME.registerComponent('car-logic', {
+    // --- Car Controller Component ---
+    AFRAME.registerComponent('car-controller', {
       schema: {
-        axis: { default: 'z' },
-        dir: { type: 'number' },
-        color: { type: 'color' },
-        laneId: { type: 'number' },
-        speed: { default: 8 }
+        speed: {type: 'number', default: 5},
+        axis: {type: 'string', default: 'z'}, // 'x' or 'z'
+        dir: {type: 'number', default: 1} // 1 or -1
       },
-      init() {
-        this.stopTarget = 9.6; 
-        this.laneOffset = 2.0;
-        this.currentSpeed = 0;
-        this.state = 'driving'; 
-        this.turnProgress = 0;
+      init: function () {
+        this.state = 'driving'; // driving, waiting, crossing, turning
+        this.stopLine = 6;
+        this.laneOffset = 2.5;
+        this.intentions = ['straight', 'right', 'left'];
+        this.intention = this.intentions[Math.floor(Math.random() * this.intentions.length)];
         
-        // Random Intention
-        const r = Math.random();
-        this.intention = r < 0.45 ? 'straight' : (r < 0.75 ? 'right' : 'left');
+        this.turnTime = 2.0;
+        this.turnTimer = 0;
 
-        this.buildMesh();
+        // Car Appearance
+        const body = document.createElement('a-box');
+        body.setAttribute('color', ['#FF0000', '#0000FF', '#00FF00', '#FFFF00', '#FFA500'][Math.floor(Math.random() * 5)]);
+        body.setAttribute('depth', 4);
+        body.setAttribute('width', 2);
+        body.setAttribute('height', 1);
+        body.setAttribute('position', '0 0.5 0');
+        this.el.appendChild(body);
+
+        const cabin = document.createElement('a-box');
+        cabin.setAttribute('color', '#AAAAAA');
+        cabin.setAttribute('depth', 2);
+        cabin.setAttribute('width', 1.8);
+        cabin.setAttribute('height', 0.8);
+        cabin.setAttribute('position', '0 1.4 0');
+        this.el.appendChild(cabin);
+
         this.resetPosition();
-
-        this.system = this.el.sceneEl.systems['traffic-manager'];
-        this.system.registerCar(this.el, this.data.laneId);
-
-        this.el.addEventListener('go-signal', () => {
-            // Signal & Wait
-            this.toggleSignal(true);
-            setTimeout(() => { this.state = 'crossing'; }, 600);
-        });
       },
-      remove() {
-        if (this.system) this.system.unregisterCar(this.el, this.data.laneId);
-      },
-      
-      getDistAhead() {
-        const carAhead = this.system.getCarAhead(this.el, this.data.laneId);
-        if (!carAhead) return 999; 
-
-        // If car ahead is crossing, treat as clear
-        const state = carAhead.components['car-logic'].state;
-        if (state === 'crossing' || state === 'departing') return 999;
-
-        const myPos = (this.data.axis==='z') ? this.el.object3D.position.z : this.el.object3D.position.x;
-        const otherPos = (this.data.axis==='z') ? carAhead.object3D.position.z : carAhead.object3D.position.x;
-        
-        return (otherPos - myPos) * this.data.dir;
-      },
-
-      tick(t, dt) {
-        const delta = dt / 1000;
-        const p = this.el.object3D.position;
-
-        // DRIVING
-        if (this.state === 'driving') {
-            const distAhead = this.getDistAhead();
-            const distToLine = Math.abs((this.data.axis==='z'?p.z:p.x)) - this.stopTarget;
-            let targetSpeed = this.data.speed;
-
-            if (distAhead < 10) targetSpeed = 0; 
-            if (distToLine < 15 && distToLine > 0 && targetSpeed > 0) targetSpeed = Math.min(targetSpeed, distToLine * 1.5);
-
-            if (this.currentSpeed < targetSpeed) this.currentSpeed += 5 * delta;
-            else if (this.currentSpeed > targetSpeed) this.currentSpeed -= 6 * delta;
-
-            if (distToLine <= 0.1 && this.currentSpeed < 0.5) {
-                this.currentSpeed = 0;
-                this.state = 'waiting';
-                this.setBrakeLights(true);
-                this.system.requestEntry(this.el);
-            } else {
-                this.setBrakeLights(this.currentSpeed < this.data.speed - 1);
-            }
-
-        // WAITING
-        } else if (this.state === 'waiting') {
-            this.currentSpeed = 0;
-            this.setBrakeLights(true);
-
-        // CROSSING
-        } else if (this.state === 'crossing') {
-            this.setBrakeLights(false);
-            this.currentSpeed += 5 * delta;
-            if (this.currentSpeed > this.data.speed) this.currentSpeed = this.data.speed;
-
-            if (this.intention === 'straight') {
-                // straight
-            } else {
-                const turnRate = (Math.PI/2) * delta * 0.9;
-                this.turnProgress += turnRate;
-                if (this.intention === 'right') this.el.object3D.rotateY(-turnRate);
-                else this.el.object3D.rotateY(turnRate * 0.8);
-
-                if (this.turnProgress >= Math.PI/2) {
-                    const y = this.el.object3D.rotation.y;
-                    this.el.object3D.rotation.y = Math.round(y/(Math.PI/2))*(Math.PI/2);
-                    this.state = 'departing';
-                    this.toggleSignal(false);
-                }
-            }
-            if (p.lengthSq() > 160) {
-                this.system.notifyClear(this.el);
-                if (this.intention === 'straight') this.state = 'departing';
-            }
-
-        // DEPARTING
-        } else if (this.state === 'departing') {
-            this.setBrakeLights(false);
-            if (Math.abs(p.x) > 90 || Math.abs(p.z) > 90) {
-                this.el.remove();
-                return;
-            }
-        }
-        this.el.object3D.translateZ(this.currentSpeed * delta);
-      },
-
-      buildMesh() {
-        const grp = document.createElement('a-entity');
-        
-        // Car Body
-        const b = document.createElement('a-box');
-        b.setAttribute('scale','1.8 0.6 4.4'); b.setAttribute('position','0 0.6 0'); 
-        b.setAttribute('color',this.data.color); b.setAttribute('shadow','cast:true');
-        grp.appendChild(b);
-        
-        // Cabin
-        const c = document.createElement('a-box');
-        c.setAttribute('scale','1.6 0.5 2.4'); c.setAttribute('position','0 1.15 0.1'); 
-        c.setAttribute('color','#1a1a1a');
-        grp.appendChild(c);
-        
-        // Lights
-        this.addL(grp, -0.6, 0.6, -2.2, '#fff'); 
-        this.addL(grp, 0.6, 0.6, -2.2, '#fff'); // Headlights
-        this.brakeL = this.addL(grp, -0.6, 0.6, 2.2, '#500'); 
-        this.brakeR = this.addL(grp, 0.6, 0.6, 2.2, '#500'); // Taillights
-        this.turnL = this.addS(grp, -0.85, 0.6, -2.1); 
-        this.turnR = this.addS(grp, 0.85, 0.6, -2.1); // Signals
-        
-        // Wheels
-        [ [0.9,1.3], [-0.9,1.3], [0.9,-1.3], [-0.9,-1.3] ].forEach(pos => {
-            const w = document.createElement('a-cylinder');
-            w.setAttribute('rotation','0 0 90'); w.setAttribute('radius',0.35); w.setAttribute('height',0.2); w.setAttribute('color','#111');
-            w.setAttribute('position', `${pos[0]} 0.35 ${pos[1]}`);
-            grp.appendChild(w);
-        });
-        this.el.appendChild(grp);
-      },
-      addL(p,x,y,z,col) {
-        const l = document.createElement('a-box');
-        l.setAttribute('scale','0.3 0.15 0.05'); l.setAttribute('position',`${x} ${y} ${z}`); l.setAttribute('color',col); l.setAttribute('shader','flat');
-        p.appendChild(l); return l;
-      },
-      addS(p,x,y,z) {
-        const s = document.createElement('a-sphere');
-        s.setAttribute('radius', 0.1); s.setAttribute('position', `${x} ${y} ${z}`);
-        s.setAttribute('color', 'orange'); s.setAttribute('visible', false);
-        p.appendChild(s); return s;
-      },
-      setBrakeLights(on) {
-        const c = on ? '#ff0000' : '#550000';
-        if(this.brakeL) { this.brakeL.setAttribute('color', c); this.brakeR.setAttribute('color', c); }
-      },
-      toggleSignal(on) {
-        if(!on) { this.turnL.setAttribute('visible',false); this.turnR.setAttribute('visible',false); return; }
-        if(this.intention==='left') this.turnL.setAttribute('visible',true);
-        if(this.intention==='right') this.turnR.setAttribute('visible',true);
-      },
-      resetPosition() {
-        const dist = 70;
+      resetPosition: function() {
+        let x = 0, z = 0, ry = 0;
         if (this.data.axis === 'z') {
-           const x = (this.data.dir === -1) ? this.laneOffset : -this.laneOffset;
-           this.el.object3D.position.set(x, 0, dist * -this.data.dir);
-           this.el.object3D.rotation.y = (this.data.dir === 1) ? 0 : Math.PI;
+          x = this.data.dir === 1 ? -this.laneOffset : this.laneOffset;
+          z = -this.data.dir * 50;
+          ry = this.data.dir === 1 ? 0 : 180;
         } else {
-           const z = (this.data.dir === 1) ? this.laneOffset : -this.laneOffset;
-           this.el.object3D.position.set(dist * -this.data.dir, 0, z);
-           this.el.object3D.rotation.y = (this.data.dir === 1) ? -Math.PI/2 : Math.PI/2;
+          x = -this.data.dir * 50;
+          z = this.data.dir === 1 ? this.laneOffset : -this.laneOffset;
+          ry = this.data.dir === 1 ? 90 : -90;
+        }
+        this.el.setAttribute('position', {x: x, y: 0, z: z});
+        this.el.setAttribute('rotation', {x: 0, y: ry, z: 0});
+        this.state = 'driving';
+      },
+      go: function() {
+        if (this.intention === 'straight') {
+          this.state = 'crossing';
+        } else {
+          this.startTurn();
+        }
+      },
+      startTurn: function() {
+        this.state = 'turning';
+        this.turnTimer = 0;
+        this.p0 = this.el.object3D.position.clone();
+
+        let turnEnd = 6;
+        let laneOffset = this.laneOffset;
+
+        if (this.intention === 'right') {
+          if (this.data.axis === 'z') {
+            this.p2 = new THREE.Vector3(this.data.dir === -1 ? -turnEnd : turnEnd, 0, this.data.dir === -1 ? laneOffset : -laneOffset);
+            this.p1 = new THREE.Vector3(this.p0.x, 0, this.p2.z);
+            this.newData = { axis: 'x', dir: this.data.dir === -1 ? -1 : 1 };
+          } else {
+            this.p2 = new THREE.Vector3(this.data.dir === 1 ? -laneOffset : laneOffset, 0, this.data.dir === 1 ? -turnEnd : turnEnd);
+            this.p1 = new THREE.Vector3(this.p2.x, 0, this.p0.z);
+            this.newData = { axis: 'z', dir: this.data.dir === 1 ? -1 : 1 };
+          }
+        } else { // left
+          if (this.data.axis === 'z') {
+            this.p2 = new THREE.Vector3(this.data.dir === -1 ? turnEnd : -turnEnd, 0, this.data.dir === -1 ? laneOffset : -laneOffset);
+            this.p1 = new THREE.Vector3(this.p2.x, 0, this.p0.z);
+            this.newData = { axis: 'x', dir: this.data.dir === -1 ? 1 : -1 };
+          } else {
+            this.p2 = new THREE.Vector3(this.data.dir === 1 ? -laneOffset : laneOffset, 0, this.data.dir === 1 ? turnEnd : -turnEnd);
+            this.p1 = new THREE.Vector3(this.p0.x, 0, this.p2.z);
+            this.newData = { axis: 'z', dir: this.data.dir === 1 ? 1 : -1 };
+          }
+        }
+      },
+      tick: function (t, dt) {
+        const pos = this.el.getAttribute('position');
+
+        if (this.state === 'turning') {
+          this.turnTimer += dt / 1000;
+          let t = this.turnTimer / this.turnTime;
+          if (t >= 1) {
+            this.state = 'driving';
+            this.turnTimer = 0;
+            this.el.object3D.position.copy(this.p2);
+            let lookAt = this.p2.clone().add(this.p2.clone().sub(this.p1).normalize());
+            this.el.object3D.lookAt(lookAt);
+            this.data.axis = this.newData.axis;
+            this.data.dir = this.newData.dir;
+          } else {
+            let newPos = new THREE.Vector3();
+            newPos.addScaledVector(this.p0, (1 - t) * (1 - t));
+            newPos.addScaledVector(this.p1, 2 * (1 - t) * t);
+            newPos.addScaledVector(this.p2, t * t);
+            this.el.object3D.position.copy(newPos);
+
+            let tangent = new THREE.Vector3();
+            tangent.addScaledVector(this.p1.clone().sub(this.p0), 2 * (1 - t));
+            tangent.addScaledVector(this.p2.clone().sub(this.p1), 2 * t);
+            tangent.normalize();
+            let lookAt = newPos.clone().add(tangent);
+            this.el.object3D.lookAt(lookAt);
+          }
+          return;
+        }
+
+        if (this.state === 'driving' || this.state === 'crossing') {
+          if (this.data.axis === 'z') {
+            pos.z += this.data.speed * this.data.dir * dt / 1000;
+          } else {
+            pos.x += this.data.speed * this.data.dir * dt / 1000;
+          }
+          this.el.setAttribute('position', pos);
+        }
+
+        if (this.state === 'driving') {
+          let dist = this.data.axis === 'z' ? pos.z * -this.data.dir : pos.x * -this.data.dir;
+          if (dist > this.stopLine - 0.5 && dist < this.stopLine + 0.5) {
+            this.state = 'waiting';
+            this.el.system.register(this.el);
+          }
+        }
+
+        if (Math.abs(pos.x) > 55 || Math.abs(pos.z) > 55) {
+          this.resetPosition();
+          this.intention = this.intentions[Math.floor(Math.random() * this.intentions.length)];
+          if (this.state === 'waiting') {
+             this.el.system.unregister(this.el);
+          }
         }
       }
     });
 
-    /* ======================================================================
-       COMPONENT: SCENE ENVIRONMENT
-       ====================================================================== */
-    AFRAME.registerComponent('city-env', {
-      init() {
-        // Create 4 Quadrants
-        this.createQuad(-50, -6, -50, -6);
-        this.createQuad( 6, 50, -50, -6);
-        this.createQuad(-50, -6,  6, 50);
-        this.createQuad( 6, 50,  6, 50);
-      },
-      createQuad(minX, maxX, minZ, maxZ) {
-        const w = maxX - minX; const h = maxZ - minZ;
-        const cx = (minX + maxX)/2; const cz = (minZ + maxZ)/2;
-        
-        // Sidewalk Base
-        const sw = document.createElement('a-box');
-        sw.setAttribute('position', `${cx} 0.15 ${cz}`);
-        sw.setAttribute('width', w); sw.setAttribute('depth', h); sw.setAttribute('height', 0.3);
-        sw.setAttribute('color', '#95a5a6');
-        this.el.appendChild(sw);
+    // --- Detailed City Component ---
+    AFRAME.registerComponent('detailed-city', {
+      init: function() {
+        const scene = this.el.sceneEl;
 
-        // Grass Topper
-        const gr = document.createElement('a-plane');
-        gr.setAttribute('position', `${cx} 0.31 ${cz}`);
-        gr.setAttribute('width', w-1); gr.setAttribute('height', h-1);
-        gr.setAttribute('rotation', '-90 0 0');
-        gr.setAttribute('color', '#27ae60');
-        this.el.appendChild(gr);
+        // Grass
+        const grass = document.createElement('a-plane');
+        grass.setAttribute('color', '#339933');
+        grass.setAttribute('rotation', '-90 0 0');
+        grass.setAttribute('width', '100');
+        grass.setAttribute('height', '100');
+        grass.setAttribute('position', '0 -0.01 0');
+        scene.appendChild(grass);
+
+        // Stop Signs
+        this.createStopSign(-6, 0, -6, 0);
+        this.createStopSign(6, 0, 6, 180);
+        this.createStopSign(-6, 0, 6, 90);
+        this.createStopSign(6, 0, -6, -90);
 
         // Buildings
-        for (let x=minX+4; x<maxX-4; x+=10) {
-            for (let z=minZ+4; z<maxZ-4; z+=10) {
-                if(Math.random()>0.3) this.buildBldg(x, z);
-                else this.buildTree(x, z);
-            }
-        }
+        this.createBuilding(-25, 15, -25, 20, 30, '#AABBAA');
+        this.createBuilding(25, 20, -25, 25, 35, '#BBCCBB');
+        this.createBuilding(-25, 18, 25, 22, 28, '#99AA99');
+        this.createBuilding(25, 22, 25, 28, 32, '#AABBAA');
+        this.createBuilding(-45, 12, 0, 15, 24, '#889988');
+        this.createBuilding(45, 14, 0, 15, 28, '#99AA99');
+
+        // Trees
+        this.createTree(-12, 0, -12);
+        this.createTree(12, 0, -12);
+        this.createTree(-12, 0, 12);
+        this.createTree(12, 0, 12);
+        this.createTree(-20, 0, 0);
+        this.createTree(20, 0, 0);
+
+        // Streetlights
+        this.createStreetlight(-7, 0, -7);
+        this.createStreetlight(7, 0, 7);
+      },
+
+      createStopSign: function(x, y, z, rot) {
+        const sign = document.createElement('a-entity');
+        sign.setAttribute('position', `${x} ${y} ${z}`);
+        sign.setAttribute('rotation', `0 ${rot} 0`);
+
+        const pole = document.createElement('a-cylinder');
+        pole.setAttribute('color', '#555555');
+        pole.setAttribute('height', '2');
+        pole.setAttribute('radius', '0.05');
+        sign.appendChild(pole);
+
+        const top = document.createElement('a-entity');
+        top.setAttribute('position', '0 2 0');
         
-        // Streetlamp (always on)
-        this.createLamp(maxX>0?8:-8, maxZ>0?8:-8);
+        const octagon = document.createElement('a-cylinder');
+        octagon.setAttribute('color', '#cc0000');
+        octagon.setAttribute('height', '0.1');
+        octagon.setAttribute('radius', '0.4');
+        octagon.setAttribute('segments-radial', '8');
+        octagon.setAttribute('rotation', '90 0 0');
+        top.appendChild(octagon);
+
+        const border = document.createElement('a-ring');
+        border.setAttribute('color', 'white');
+        border.setAttribute('radius-inner', '0.35');
+        border.setAttribute('radius-outer', '0.4');
+        border.setAttribute('rotation', '90 0 0');
+        border.setAttribute('position', '0 0 0.051');
+        top.appendChild(border);
+
+        const text = document.createElement('a-text');
+        text.setAttribute('value', 'STOP');
+        text.setAttribute('align', 'center');
+        text.setAttribute('color', 'white');
+        text.setAttribute('scale', '0.8 0.8 0.8');
+        text.setAttribute('position', '0 0 0.06');
+        top.appendChild(text);
+
+        sign.appendChild(top);
+        this.el.sceneEl.appendChild(sign);
       },
-      buildBldg(x, z) {
-        const h = 8 + Math.random()*15;
-        const el = document.createElement('a-box');
-        el.setAttribute('position', `${x} ${h/2+0.3} ${z}`);
-        el.setAttribute('width', 9); el.setAttribute('depth', 9); el.setAttribute('height', h);
-        el.setAttribute('color', ['#2c3e50','#34495e','#7f8c8d'][Math.floor(Math.random()*3)]);
-        el.setAttribute('shadow', 'cast:true; receive:true');
-        
-        // Windows
-        for(let y=2; y<h-1; y+=3) {
-             if(Math.random()>0.5) this.addWin(el, 0, y-h/2, 4.51);
-             if(Math.random()>0.5) this.addWin(el, 4.51, y-h/2, 0, 90);
-        }
-        this.el.appendChild(el);
+
+      createBuilding: function(x, y, z, w, h, color) {
+        const building = document.createElement('a-box');
+        building.setAttribute('position', `${x} ${y + h/2} ${z}`);
+        building.setAttribute('width', w);
+        building.setAttribute('height', h);
+        building.setAttribute('depth', w);
+        building.setAttribute('color', color);
+        this.el.sceneEl.appendChild(building);
       },
-      addWin(p,x,y,z,r) {
-        const w=document.createElement('a-plane'); w.setAttribute('width',1.5); w.setAttribute('height',1.5);
-        w.setAttribute('color','#f1c40f'); w.setAttribute('shader','flat');
-        w.setAttribute('position',`${x} ${y} ${z}`); if(r) w.setAttribute('rotation',`0 ${r} 0`);
-        p.appendChild(w);
+
+      createTree: function(x, y, z) {
+        const tree = document.createElement('a-entity');
+        tree.setAttribute('position', `${x} ${y} ${z}`);
+
+        const trunk = document.createElement('a-cylinder');
+        trunk.setAttribute('color', '#8B4513');
+        trunk.setAttribute('height', '1.5');
+        trunk.setAttribute('radius', '0.2');
+        trunk.setAttribute('position', '0 0.75 0');
+        tree.appendChild(trunk);
+
+        const leaves = document.createElement('a-sphere');
+        leaves.setAttribute('color', '#228B22');
+        leaves.setAttribute('radius', '1.5');
+        leaves.setAttribute('position', '0 2.25 0');
+        tree.appendChild(leaves);
+
+        this.el.sceneEl.appendChild(tree);
       },
-      buildTree(x, z) {
-        const t = document.createElement('a-cylinder');
-        t.setAttribute('position', `${x} 1 ${z}`);
-        t.setAttribute('radius', 0.3); t.setAttribute('height', 2); t.setAttribute('color', '#5d4037');
-        const l = document.createElement('a-cone');
-        l.setAttribute('position', `0 2.5 0`);
-        l.setAttribute('radius-bottom', 2.5); l.setAttribute('height', 5); l.setAttribute('color', '#2ecc71');
-        t.appendChild(l);
-        this.el.appendChild(t);
-      },
-      createLamp(x,z) {
-        const l=document.createElement('a-entity'); l.setAttribute('position',`${x} 0.3 ${z}`);
-        const p=document.createElement('a-cylinder'); p.setAttribute('radius',0.15); p.setAttribute('height',6); p.setAttribute('color','#222'); p.setAttribute('position','0 3 0');
-        const b=document.createElement('a-sphere'); b.setAttribute('radius',0.4); b.setAttribute('color','#fff'); b.setAttribute('position','0 6 0'); b.setAttribute('material','emissive:#fff');
-        const li=document.createElement('a-entity'); li.setAttribute('light','type:point; intensity:0.8; distance:20; color:#ffe');
-        li.setAttribute('position','0 5 0'); 
-        l.appendChild(li); l.appendChild(p); l.appendChild(b); this.el.appendChild(l);
+      
+      createStreetlight: function(x, y, z) {
+          const light = document.createElement('a-entity');
+          light.setAttribute('position', `${x} ${y} ${z}`);
+          
+          const pole = document.createElement('a-cylinder');
+          pole.setAttribute('color', '#444444');
+          pole.setAttribute('height', '4');
+          pole.setAttribute('radius', '0.1');
+          pole.setAttribute('position', '0 2 0');
+          light.appendChild(pole);
+          
+          const arm = document.createElement('a-box');
+          arm.setAttribute('color', '#444444');
+          arm.setAttribute('height', '0.1');
+          arm.setAttribute('width', '1.5');
+          arm.setAttribute('depth', '0.1');
+          arm.setAttribute('position', '0.7 4 0');
+          light.appendChild(arm);
+          
+          const bulb = document.createElement('a-sphere');
+          bulb.setAttribute('color', '#FFFFEE');
+          bulb.setAttribute('radius', '0.2');
+          bulb.setAttribute('position', '1.4 3.8 0');
+          bulb.setAttribute('material', 'emissive: #FFFFEE; emissiveIntensity: 0.5');
+          light.appendChild(bulb);
+          
+          this.el.sceneEl.appendChild(light);
       }
-    });
-
-    // --- Laptop Trackpad Zoom ---
-    AFRAME.registerComponent('trackpad-zoom', {
-        init() {
-            window.addEventListener('wheel', e => {
-                e.preventDefault();
-                const rig = this.el.object3D;
-                const cam = this.el.querySelector('[camera]').object3D;
-                const dir = new THREE.Vector3(0,0,-1).applyQuaternion(cam.quaternion);
-                rig.position.addScaledVector(dir, -e.deltaY * 0.02);
-            }, {passive:false});
-        }
-    });
-
-    // Helper: Stop Sign
-    AFRAME.registerComponent('stop-sign', {
-       schema: { rot: {type:'number'} },
-       init() {
-         const p = document.createElement('a-cylinder');
-         p.setAttribute('color','#555'); p.setAttribute('radius',0.05); p.setAttribute('height',2.5); p.setAttribute('position','0 1.25 0');
-         const s = document.createElement('a-circle');
-         s.setAttribute('color','#c0392b'); s.setAttribute('radius',0.45); s.setAttribute('position','0 2.5 0.06'); s.setAttribute('side','double');
-         const t = document.createElement('a-text');
-         t.setAttribute('value', 'STOP'); t.setAttribute('align', 'center'); t.setAttribute('scale', '0.9 0.9 0.9'); t.setAttribute('position', '0 2.5 0.07');
-         this.el.appendChild(p); this.el.appendChild(s); this.el.appendChild(t);
-         this.el.object3D.rotation.y = this.data.rot * (Math.PI/180);
-       }
     });
   </script>
 </head>
+<body>
+  <a-scene traffic-manager>
+    <a-entity detailed-city></a-entity>
 
-<body style="margin:0; background:#000;">
-  <a-scene background="color: #3a1c31" traffic-manager car-spawner shadow="type: pcfsoft" fog="type: exponential; color: #4b2d4b; density: 0.006">
+    <a-plane position="0 0.01 0" rotation="-90 0 0" width="12" height="100" color="#333333"></a-plane>
+    <a-plane position="0 0.01 0" rotation="-90 90 0" width="12" height="100" color="#333333"></a-plane>
     
-    <a-sky color="#3a1c31"></a-sky>
-    
-    <a-entity position="-30 10 -30">
-        <a-sphere radius="4" color="#ff9f43" material="shader:flat; fog:false"></a-sphere>
-        <a-entity light="type:directional; castShadow:true; intensity:0.8; color:#ffcc99"></a-entity>
-    </a-entity>
-    
-    <a-entity light="type:ambient; intensity:0.4; color:#663366"></a-entity>
-
-    <a-plane rotation="-90 0 0" width="200" height="200" color="#111"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.02 0" width="12" height="150" color="#222"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.03 0" width="150" height="12" color="#222"></a-plane>
-
-    <a-plane rotation="-90 0 0" position="0 0.04 -40" width="0.15" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="0.25 0.04 -40" width="0.15" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.04 40" width="0.15" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="0.25 0.04 40" width="0.15" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="-40 0.04 0" width="65" height="0.15" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="-40 0.04 0.25" width="65" height="0.15" color="#f1c40f"></a-plane>
-
-    <a-entity id="crosswalks">
-        <a-plane rotation="-90 0 0" position="0 0.05 -7" width="12" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="0 0.06 -7" width="11" height="1.8" color="#222"></a-plane>
-        <a-plane rotation="-90 0 0" position="0 0.07 -7" width="1" height="1.8" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-3 0.07 -7" width="1" height="1.8" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="3 0.07 -7" width="1" height="1.8" color="white"></a-plane>
-
-        <a-plane rotation="-90 0 0" position="0 0.05 7" width="12" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="0 0.06 7" width="11" height="1.8" color="#222"></a-plane>
-        <a-plane rotation="-90 0 0" position="0 0.07 7" width="1" height="1.8" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-3 0.07 7" width="1" height="1.8" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="3 0.07 7" width="1" height="1.8" color="white"></a-plane>
-
-        <a-plane rotation="-90 0 0" position="7 0.05 0" width="2" height="12" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="7 0.06 0" width="1.8" height="11" color="#222"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.05 0" width="2" height="12" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.06 0" width="1.8" height="11" color="#222"></a-plane>
+    <a-entity position="0 0.02 0">
+      <a-plane position="0 0 -25" rotation="-90 0 0" width="0.2" height="40" color="#FFFFFF"></a-plane>
+      <a-plane position="0 0 25" rotation="-90 0 0" width="0.2" height="40" color="#FFFFFF"></a-plane>
+      <a-plane position="-25 0 0" rotation="-90 90 0" width="0.2" height="40" color="#FFFFFF"></a-plane>
+      <a-plane position="25 0 0" rotation="-90 90 0" width="0.2" height="40" color="#FFFFFF"></a-plane>
     </a-entity>
 
-    <a-plane rotation="-90 0 0" position="0 0.05 -8.5" width="5.8" height="0.6" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.05 8.5" width="5.8" height="0.6" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="-8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
+    <a-plane position="0 0.02 -6" rotation="-90 0 0" width="12" height="0.5" color="#FFFFFF"></a-plane>
+    <a-plane position="0 0.02 6" rotation="-90 0 0" width="12" height="0.5" color="#FFFFFF"></a-plane>
+    <a-plane position="-6 0.02 0" rotation="-90 90 0" width="12" height="0.5" color="#FFFFFF"></a-plane>
+    <a-plane position="6 0.02 0" rotation="-90 90 0" width="12" height="0.5" color="#FFFFFF"></a-plane>
 
-    <a-entity city-env></a-entity>
-    <a-entity stop-sign="rot:0" position="-6.5 0 -8.5"></a-entity>
-    <a-entity stop-sign="rot:-90" position="6.5 0 -8.5"></a-entity>
-    <a-entity stop-sign="rot:180" position="6.5 0 8.5"></a-entity>
-    <a-entity stop-sign="rot:90" position="-6.5 0 8.5"></a-entity>
+    <a-entity car-controller="axis: z; dir: 1"></a-entity>
+    <a-entity car-controller="axis: z; dir: -1"></a-entity>
+    <a-entity car-controller="axis: x; dir: 1"></a-entity>
+    <a-entity car-controller="axis: x; dir: -1"></a-entity>
 
-    <a-entity id="rig" position="-14 2 14" rotation="0 -45 0" wasd-controls trackpad-zoom>
-      <a-entity camera look-controls></a-entity>
-    </a-entity>
+    <a-sky color="#FFD700"></a-sky> <a-light type="directional" color="#FFD700" intensity="0.8" position="-1 1 0"></a-light>
+    <a-light type="ambient" color="#888888"></a-light>
 
+    <a-camera position="0 15 30" rotation="-30 0 0"></a-camera>
   </a-scene>
 </body>
 </html>
