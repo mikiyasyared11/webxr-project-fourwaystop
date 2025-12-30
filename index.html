@@ -2,22 +2,33 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Final 4-Way Stop • Living City</title>
+  <title>Final 4-Way Stop • Gradual Cycle</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
   <script>
     /* ======================================================================
-       SYSTEM: DAY/NIGHT CYCLE
-       Rotates sun, changes sky color, toggles streetlights.
+       SYSTEM: SMOOTH DAY/NIGHT CYCLE
+       Interpolates colors for gradual transitions (Sunrise -> Day -> Sunset).
        ====================================================================== */
     AFRAME.registerSystem('day-night', {
       init() {
         this.time = 0;
+        this.cycleDuration = 60; // 60 seconds per full day
         this.sun = null;
-        this.sky = null;
         this.lamps = [];
-        this.cycleDuration = 60; // Seconds per day
+        
+        // Color Keyframes (Time 0.0 - 1.0)
+        this.keyframes = [
+            { t: 0.00, c: {r:5, g:5, b:20},    i: 0.1 }, // Deep Night
+            { t: 0.20, c: {r:50, g:20, b:60},  i: 0.2 }, // Pre-Dawn Purple
+            { t: 0.25, c: {r:200, g:80, b:40}, i: 0.5 }, // Sunrise Orange
+            { t: 0.35, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue
+            { t: 0.65, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue (Hold)
+            { t: 0.75, c: {r:230, g:140, b:40}, i: 0.6 }, // Golden Hour
+            { t: 0.80, c: {r:142, g:40, b:100}, i: 0.3 }, // Sunset Purple
+            { t: 1.00, c: {r:5, g:5, b:20},    i: 0.1 }  // Deep Night (Loop)
+        ];
       },
       registerLamp(el) { this.lamps.push(el); },
       tick(t, dt) {
@@ -31,39 +42,48 @@
 
         this.time += dt / 1000;
         const progress = (this.time % this.cycleDuration) / this.cycleDuration;
-        
-        // Sun Position (East -> Up -> West)
-        const rot = (progress * 360) - 90;
+
+        // 1. Sun Movement (Rotates around Z-axis)
+        // 0.0=Night(-90deg), 0.25=Rise(0deg), 0.5=Noon(90deg), 0.75=Set(180deg)
+        const rot = (progress * 360) - 90; 
         const rad = THREE.MathUtils.degToRad(rot);
-        const dist = 50;
+        const dist = 60;
         const y = Math.sin(rad) * dist;
         const x = Math.cos(rad) * dist;
         this.sun.setAttribute('position', `${x} ${y} 0`);
 
-        // Lighting Intensity
-        const intensity = Math.max(0, Math.sin(rad));
-        if(this.light) this.light.setAttribute('intensity', intensity * 0.9);
-        if(this.amb) this.amb.setAttribute('intensity', 0.2 + (intensity * 0.4));
-
-        // Sky Color Logic
-        let top, bot;
-        let lampsOn = false;
-        
-        if (progress < 0.15 || progress > 0.85) { // Night
-            top='#000000'; bot='#1a1a2e'; lampsOn=true;
-        } else if (progress < 0.25) { // Sunrise
-            top='#2c3e50'; bot='#e67e22'; lampsOn=true;
-        } else if (progress > 0.75) { // Sunset
-            top='#2c3e50'; bot='#d35400'; lampsOn=true;
-        } else { // Day
-            top='#3498db'; bot='#87ceeb'; lampsOn=false;
+        // 2. Color Interpolation (The "Gradual" Logic)
+        let k1 = this.keyframes[0], k2 = this.keyframes[0];
+        // Find current interval
+        for(let i=0; i < this.keyframes.length - 1; i++) {
+            if(progress >= this.keyframes[i].t && progress < this.keyframes[i+1].t) {
+                k1 = this.keyframes[i];
+                k2 = this.keyframes[i+1];
+                break;
+            }
         }
         
-        // Update Sky (Standard Fog Color trick for performance compatibility)
-        this.sky.setAttribute('color', bot); 
-        this.el.sceneEl.setAttribute('fog', `color: ${bot}`); 
+        // Percentage between k1 and k2
+        const localPct = (progress - k1.t) / (k2.t - k1.t);
+        
+        // Lerp RGB
+        const r = Math.floor(k1.c.r + (k2.c.r - k1.c.r) * localPct);
+        const g = Math.floor(k1.c.g + (k2.c.g - k1.c.g) * localPct);
+        const b = Math.floor(k1.c.b + (k2.c.b - k1.c.b) * localPct);
+        const colorStr = `rgb(${r},${g},${b})`;
+        
+        // Lerp Intensity
+        const intensity = k1.i + (k2.i - k1.i) * localPct;
 
-        // Toggle Streetlights
+        // 3. Apply to Scene
+        this.sky.setAttribute('color', colorStr);
+        this.el.sceneEl.setAttribute('fog', `color: ${colorStr}`);
+        
+        if(this.light) this.light.setAttribute('intensity', intensity);
+        if(this.amb) this.amb.setAttribute('intensity', Math.max(0.2, intensity * 0.6));
+
+        // 4. Toggle Streetlights (On when dark)
+        const lampsOn = intensity < 0.45;
         this.lamps.forEach(l => l.setAttribute('visible', lampsOn));
       }
     });
@@ -155,12 +175,12 @@
     });
 
     /* ======================================================================
-       COMPONENT: CAR LOGIC (Smooth Driving)
+       COMPONENT: CAR LOGIC (Smooth Curve Driving)
        ====================================================================== */
     AFRAME.registerComponent('car-logic', {
       schema: { axis: { default: 'z' }, dir: { type: 'number' }, color: { type: 'color' }, laneId: { type: 'number' }, speed: { default: 8 } },
       init() {
-        this.stopTarget = 9.0; // Stop behind line
+        this.stopTarget = 8.5; // Stop line
         this.laneOffset = 2.2; 
         this.currentSpeed = 0;
         this.state = 'driving'; 
@@ -274,11 +294,10 @@
     });
 
     /* ======================================================================
-       COMPONENT: COMPLETE CITY (No Gaps, 4-Sided Windows)
+       COMPONENT: COMPLETE CITY (Windows everywhere)
        ====================================================================== */
-    AFRAME.registerComponent('complete-city', {
+    AFRAME.registerComponent('city-env', {
       init() {
-        // Block generation starts exactly at 6m to close the gap
         this.createBlock(-60, -6, -60, -6); // NW
         this.createBlock( 6, 60, -60, -6);  // NE
         this.createBlock(-60, -6,  6, 60);  // SW
@@ -290,14 +309,14 @@
         const cx = (minX + maxX) / 2;
         const cz = (minZ + maxZ) / 2;
         
-        // 1. Sidewalk Base (Seamless connection to road at 6m)
+        // 1. Sidewalk Base
         const sw = document.createElement('a-box');
         sw.setAttribute('position', `${cx} 0.1 ${cz}`);
         sw.setAttribute('width', w); sw.setAttribute('depth', h); sw.setAttribute('height', 0.2);
         sw.setAttribute('color', '#bdc3c7'); 
         this.el.appendChild(sw);
 
-        // 2. Buildings (Set back 3m from the 6m line -> starts at 9m)
+        // 2. Buildings (Set back)
         const startX = minX + (minX < 0 ? 0 : 4); 
         const endX   = maxX - (maxX > 0 ? 0 : 4);
         const startZ = minZ + (minZ < 0 ? 0 : 4);
@@ -305,11 +324,9 @@
 
         for (let x=startX; x<endX; x+=12) {
             for (let z=startZ; z<endZ; z+=12) {
-                // Adjust to center of grid cell
                 this.buildBldg(x + (x<0?-6:6), z + (z<0?-6:6));
             }
         }
-        // Lamp on corner
         this.createLamp(maxX>0?9:-9, maxZ>0?9:-9);
       },
       buildBldg(x, z) {
@@ -323,28 +340,21 @@
         box.setAttribute('shadow', 'cast:true; receive:true');
         el.appendChild(box);
 
-        // --- WINDOWS ON ALL 4 SIDES ---
-        // Front (Z+), Back (Z-), Right (X+), Left (X-)
-        // Building size is 9x9. Edges are at +/- 4.5
+        // --- 4-Sided Windows Loop ---
         const offset = 4.55; 
-        
-        for(let y=2; y<h-2; y+=2.5) { // Vertical Loop
-             // Front
-             this.addWin(el, 0, y-h/2, offset, 0);
-             // Back
-             this.addWin(el, 0, y-h/2, -offset, 180);
-             // Right
-             this.addWin(el, offset, y-h/2, 0, 90);
-             // Left
-             this.addWin(el, -offset, y-h/2, 0, -90);
+        for(let y=2; y<h-2; y+=2.5) {
+             this.addWin(el, 0, y-h/2, offset, 0); // Front
+             this.addWin(el, 0, y-h/2, -offset, 180); // Back
+             this.addWin(el, offset, y-h/2, 0, 90); // Right
+             this.addWin(el, -offset, y-h/2, 0, -90); // Left
         }
         this.el.appendChild(el);
       },
       addWin(p,x,y,z,r) {
         const w=document.createElement('a-plane'); w.setAttribute('width',1.5); w.setAttribute('height',1.5);
-        w.setAttribute('color', Math.random()>0.3 ? '#f1c40f' : '#222'); // Some lights off
+        w.setAttribute('color', Math.random()>0.3 ? '#f1c40f' : '#222'); 
         w.setAttribute('shader','flat');
-        w.setAttribute('position',`${x} ${y} ${z}`); w.setAttribute('rotation',`0 ${r} 0`);
+        w.setAttribute('position',`${x} ${y} ${z}`); if(r) w.setAttribute('rotation',`0 ${r} 0`);
         p.appendChild(w);
       },
       createLamp(x,z) {
@@ -353,7 +363,6 @@
         const b=document.createElement('a-sphere'); b.setAttribute('radius',0.5); b.setAttribute('color','#fff'); b.setAttribute('position','0 7 0'); b.setAttribute('material','emissive:#fff');
         const li=document.createElement('a-entity'); li.setAttribute('light','type:point; intensity:0.8; distance:20; color:#ffe'); li.setAttribute('position','0 6 0'); li.setAttribute('visible',false);
         l.appendChild(li); l.appendChild(p); l.appendChild(b); this.el.appendChild(l);
-        // Register light
         setTimeout(() => { const sys = document.querySelector('a-scene').systems['day-night']; if(sys) sys.registerLamp(li); }, 1000);
       }
     });
@@ -442,7 +451,7 @@
     <a-plane rotation="-90 0 0" position="-8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
     <a-plane rotation="-90 0 0" position="8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
 
-    <a-entity complete-city></a-entity>
+    <a-entity city-env></a-entity>
     
     <a-entity stop-sign="rot:0" position="-7 0 -9"></a-entity>
     <a-entity stop-sign="rot:-90" position="7 0 -9"></a-entity>
