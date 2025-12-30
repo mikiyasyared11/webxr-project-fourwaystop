@@ -2,14 +2,14 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Final 4-Way Stop • Gradual Cycle</title>
+  <title>Final 4-Way Stop • Cinematic</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
   <script>
     /* ======================================================================
-       SYSTEM: SMOOTH DAY/NIGHT CYCLE
-       Interpolates colors for gradual transitions (Sunrise -> Day -> Sunset).
+       SYSTEM: CINEMATIC DAY/NIGHT CYCLE
+       Uses Linear Interpolation (Lerp) for buttery smooth color transitions.
        ====================================================================== */
     AFRAME.registerSystem('day-night', {
       init() {
@@ -18,19 +18,20 @@
         this.sun = null;
         this.lamps = [];
         
-        // Color Keyframes (Time 0.0 - 1.0)
-        this.keyframes = [
-            { t: 0.00, c: {r:5, g:5, b:20},    i: 0.1 }, // Deep Night
-            { t: 0.20, c: {r:50, g:20, b:60},  i: 0.2 }, // Pre-Dawn Purple
+        // Color Palette (Time 0.0 to 1.0)
+        this.palette = [
+            { t: 0.00, c: {r:5, g:5, b:15},    i: 0.1 }, // Deep Night
+            { t: 0.20, c: {r:40, g:20, b:50},  i: 0.2 }, // Dawn Purple
             { t: 0.25, c: {r:200, g:80, b:40}, i: 0.5 }, // Sunrise Orange
             { t: 0.35, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue
-            { t: 0.65, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue (Hold)
-            { t: 0.75, c: {r:230, g:140, b:40}, i: 0.6 }, // Golden Hour
-            { t: 0.80, c: {r:142, g:40, b:100}, i: 0.3 }, // Sunset Purple
-            { t: 1.00, c: {r:5, g:5, b:20},    i: 0.1 }  // Deep Night (Loop)
+            { t: 0.65, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue Hold
+            { t: 0.75, c: {r:210, g:140, b:50}, i: 0.6 }, // Golden Hour
+            { t: 0.82, c: {r:100, g:40, b:80}, i: 0.3 }, // Sunset Violet
+            { t: 1.00, c: {r:5, g:5, b:15},    i: 0.1 }  // Night Loop
         ];
       },
       registerLamp(el) { this.lamps.push(el); },
+      
       tick(t, dt) {
         if (!this.sun) {
             this.sun = document.querySelector('#sun-orb');
@@ -43,47 +44,44 @@
         this.time += dt / 1000;
         const progress = (this.time % this.cycleDuration) / this.cycleDuration;
 
-        // 1. Sun Movement (Rotates around Z-axis)
-        // 0.0=Night(-90deg), 0.25=Rise(0deg), 0.5=Noon(90deg), 0.75=Set(180deg)
+        // 1. Sun Orbit
         const rot = (progress * 360) - 90; 
         const rad = THREE.MathUtils.degToRad(rot);
-        const dist = 60;
-        const y = Math.sin(rad) * dist;
-        const x = Math.cos(rad) * dist;
+        const y = Math.sin(rad) * 60;
+        const x = Math.cos(rad) * 60;
         this.sun.setAttribute('position', `${x} ${y} 0`);
 
-        // 2. Color Interpolation (The "Gradual" Logic)
-        let k1 = this.keyframes[0], k2 = this.keyframes[0];
-        // Find current interval
-        for(let i=0; i < this.keyframes.length - 1; i++) {
-            if(progress >= this.keyframes[i].t && progress < this.keyframes[i+1].t) {
-                k1 = this.keyframes[i];
-                k2 = this.keyframes[i+1];
+        // 2. Smooth Color Blending
+        let k1 = this.palette[0], k2 = this.palette[0];
+        for(let i=0; i < this.palette.length - 1; i++) {
+            if(progress >= this.palette[i].t && progress < this.palette[i+1].t) {
+                k1 = this.palette[i];
+                k2 = this.palette[i+1];
                 break;
             }
         }
         
-        // Percentage between k1 and k2
+        // Calculate percentage between keyframes
         const localPct = (progress - k1.t) / (k2.t - k1.t);
         
-        // Lerp RGB
+        // Interpolate RGB values
         const r = Math.floor(k1.c.r + (k2.c.r - k1.c.r) * localPct);
         const g = Math.floor(k1.c.g + (k2.c.g - k1.c.g) * localPct);
         const b = Math.floor(k1.c.b + (k2.c.b - k1.c.b) * localPct);
         const colorStr = `rgb(${r},${g},${b})`;
         
-        // Lerp Intensity
+        // Interpolate Light Intensity
         const intensity = k1.i + (k2.i - k1.i) * localPct;
 
-        // 3. Apply to Scene
+        // Apply
         this.sky.setAttribute('color', colorStr);
-        this.el.sceneEl.setAttribute('fog', `color: ${colorStr}`);
+        this.el.sceneEl.setAttribute('fog', `color: ${colorStr}`); // Match fog to sky
         
         if(this.light) this.light.setAttribute('intensity', intensity);
-        if(this.amb) this.amb.setAttribute('intensity', Math.max(0.2, intensity * 0.6));
+        if(this.amb) this.amb.setAttribute('intensity', Math.max(0.1, intensity * 0.5));
 
-        // 4. Toggle Streetlights (On when dark)
-        const lampsOn = intensity < 0.45;
+        // Toggle Lamps (On when dark)
+        const lampsOn = intensity < 0.4;
         this.lamps.forEach(l => l.setAttribute('visible', lampsOn));
       }
     });
@@ -141,17 +139,18 @@
     });
 
     /* ======================================================================
-       SYSTEM: CAR SPAWNER
+       SYSTEM: ROUND-ROBIN SPAWNER (Fixes missing cars)
        ====================================================================== */
     AFRAME.registerSystem('car-spawner', {
       init() {
         this.timer = 0;
-        this.interval = 2500;
+        this.interval = 2000;
+        // Explicitly defined lanes to ensure cycling works
         this.configs = [
-            { id:0, axis:'z', dir:-1, color:'#c0392b' }, 
-            { id:1, axis:'z', dir: 1, color:'#2980b9' },  
-            { id:2, axis:'x', dir: 1, color:'#f1c40f' },  
-            { id:3, axis:'x', dir:-1, color:'#8e44ad' }   
+            { id:0, axis:'z', dir:-1, color:'#c0392b' }, // N
+            { id:1, axis:'z', dir: 1, color:'#2980b9' }, // S
+            { id:2, axis:'x', dir: 1, color:'#f1c40f' }, // E
+            { id:3, axis:'x', dir:-1, color:'#8e44ad' }  // W
         ];
         this.idx = 0;
       },
@@ -160,37 +159,47 @@
         if (this.timer > this.interval) {
             this.spawn();
             this.timer = 0;
-            this.interval = 3000 + Math.random() * 2000;
+            this.interval = 2500 + Math.random() * 1500;
         }
       },
       spawn() {
+        // SEQUENTIAL SPAWNING: 0 -> 1 -> 2 -> 3 -> 0
+        // This guarantees no lane is ever ignored.
         const cfg = this.configs[this.idx];
+        
         const el = document.createElement('a-entity');
-        const colors = [cfg.color, '#ecf0f1', '#2c3e50', '#95a5a6', cfg.color];
+        const colors = [cfg.color, '#ecf0f1', '#2c3e50', '#c0392b', '#e67e22'];
         const col = colors[Math.floor(Math.random()*colors.length)];
+        
         el.setAttribute('car-logic', { axis: cfg.axis, dir: cfg.dir, color: col, laneId: cfg.id });
         this.el.appendChild(el);
-        this.idx = Math.floor(Math.random() * 4);
+        
+        // Move to next lane
+        this.idx = (this.idx + 1) % 4;
       }
     });
 
     /* ======================================================================
-       COMPONENT: CAR LOGIC (Smooth Curve Driving)
+       COMPONENT: CAR LOGIC
        ====================================================================== */
     AFRAME.registerComponent('car-logic', {
       schema: { axis: { default: 'z' }, dir: { type: 'number' }, color: { type: 'color' }, laneId: { type: 'number' }, speed: { default: 8 } },
       init() {
-        this.stopTarget = 8.5; // Stop line
-        this.laneOffset = 2.2; 
+        this.stopTarget = 9.0; 
+        this.laneOffset = 2.2;
         this.currentSpeed = 0;
         this.state = 'driving'; 
         this.turnProgress = 0;
+        
         const r = Math.random();
         this.intention = r < 0.45 ? 'straight' : (r < 0.75 ? 'right' : 'left');
+
         this.buildMesh();
         this.resetPosition();
+
         this.system = this.el.sceneEl.systems['traffic-manager'];
         this.system.registerCar(this.el, this.data.laneId);
+
         this.el.addEventListener('go-signal', () => {
             this.toggleSignal(true);
             setTimeout(() => { this.state = 'crossing'; }, 600);
@@ -294,7 +303,7 @@
     });
 
     /* ======================================================================
-       COMPONENT: COMPLETE CITY (Windows everywhere)
+       COMPONENT: COMPLETE CITY
        ====================================================================== */
     AFRAME.registerComponent('city-env', {
       init() {
@@ -309,14 +318,12 @@
         const cx = (minX + maxX) / 2;
         const cz = (minZ + maxZ) / 2;
         
-        // 1. Sidewalk Base
         const sw = document.createElement('a-box');
         sw.setAttribute('position', `${cx} 0.1 ${cz}`);
         sw.setAttribute('width', w); sw.setAttribute('depth', h); sw.setAttribute('height', 0.2);
         sw.setAttribute('color', '#bdc3c7'); 
         this.el.appendChild(sw);
 
-        // 2. Buildings (Set back)
         const startX = minX + (minX < 0 ? 0 : 4); 
         const endX   = maxX - (maxX > 0 ? 0 : 4);
         const startZ = minZ + (minZ < 0 ? 0 : 4);
@@ -340,13 +347,12 @@
         box.setAttribute('shadow', 'cast:true; receive:true');
         el.appendChild(box);
 
-        // --- 4-Sided Windows Loop ---
         const offset = 4.55; 
         for(let y=2; y<h-2; y+=2.5) {
-             this.addWin(el, 0, y-h/2, offset, 0); // Front
-             this.addWin(el, 0, y-h/2, -offset, 180); // Back
-             this.addWin(el, offset, y-h/2, 0, 90); // Right
-             this.addWin(el, -offset, y-h/2, 0, -90); // Left
+             this.addWin(el, 0, y-h/2, offset, 0); 
+             this.addWin(el, 0, y-h/2, -offset, 180); 
+             this.addWin(el, offset, y-h/2, 0, 90); 
+             this.addWin(el, -offset, y-h/2, 0, -90); 
         }
         this.el.appendChild(el);
       },
