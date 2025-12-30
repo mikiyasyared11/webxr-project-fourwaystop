@@ -2,36 +2,36 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Final 4-Way Stop • Cinematic</title>
+  <title>Final 4-Way Stop • Complete</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
   <script>
     /* ======================================================================
-       SYSTEM: CINEMATIC DAY/NIGHT CYCLE
-       Uses Linear Interpolation (Lerp) for buttery smooth color transitions.
+       SYSTEM: CINEMATIC DAY/NIGHT (Smooth Lerp)
        ====================================================================== */
     AFRAME.registerSystem('day-night', {
       init() {
         this.time = 0;
-        this.cycleDuration = 60; // 60 seconds per full day
+        this.cycle = 60; // 60s Day Loop
         this.sun = null;
-        this.lamps = [];
         
-        // Color Palette (Time 0.0 to 1.0)
-        this.palette = [
-            { t: 0.00, c: {r:5, g:5, b:15},    i: 0.1 }, // Deep Night
-            { t: 0.20, c: {r:40, g:20, b:50},  i: 0.2 }, // Dawn Purple
-            { t: 0.25, c: {r:200, g:80, b:40}, i: 0.5 }, // Sunrise Orange
-            { t: 0.35, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue
-            { t: 0.65, c: {r:135, g:206, b:235}, i: 1.0 }, // Day Blue Hold
-            { t: 0.75, c: {r:210, g:140, b:50}, i: 0.6 }, // Golden Hour
-            { t: 0.82, c: {r:100, g:40, b:80}, i: 0.3 }, // Sunset Violet
-            { t: 1.00, c: {r:5, g:5, b:15},    i: 0.1 }  // Night Loop
+        // Color Keyframes (Time 0-1)
+        this.keys = [
+            { t: 0.00, c: {r:10, g:10, b:20},  i: 0.1 }, // Night
+            { t: 0.20, c: {r:60, g:30, b:60},  i: 0.2 }, // Dawn
+            { t: 0.25, c: {r:255, g:100, b:50},i: 0.6 }, // Sunrise
+            { t: 0.35, c: {r:135, g:206, b:235}, i: 1.0 }, // Noon Blue
+            { t: 0.65, c: {r:135, g:206, b:235}, i: 1.0 }, // Afternoon
+            { t: 0.75, c: {r:255, g:160, b:60}, i: 0.7 }, // Golden Hour
+            { t: 0.82, c: {r:120, g:50, b:100}, i: 0.3 }, // Dusk
+            { t: 1.00, c: {r:10, g:10, b:20},  i: 0.1 }  // Night
         ];
       },
-      registerLamp(el) { this.lamps.push(el); },
-      
+      registerLamp(el) { 
+        if(!this.lamps) this.lamps = [];
+        this.lamps.push(el); 
+      },
       tick(t, dt) {
         if (!this.sun) {
             this.sun = document.querySelector('#sun-orb');
@@ -42,47 +42,35 @@
         }
 
         this.time += dt / 1000;
-        const progress = (this.time % this.cycleDuration) / this.cycleDuration;
+        const p = (this.time % this.cycle) / this.cycle;
 
-        // 1. Sun Orbit
-        const rot = (progress * 360) - 90; 
+        // 1. Sun Motion
+        const rot = (p * 360) - 90; 
         const rad = THREE.MathUtils.degToRad(rot);
-        const y = Math.sin(rad) * 60;
-        const x = Math.cos(rad) * 60;
-        this.sun.setAttribute('position', `${x} ${y} 0`);
+        this.sun.setAttribute('position', `${Math.cos(rad)*60} ${Math.sin(rad)*60} 0`);
 
-        // 2. Smooth Color Blending
-        let k1 = this.palette[0], k2 = this.palette[0];
-        for(let i=0; i < this.palette.length - 1; i++) {
-            if(progress >= this.palette[i].t && progress < this.palette[i+1].t) {
-                k1 = this.palette[i];
-                k2 = this.palette[i+1];
-                break;
+        // 2. Color Lerp
+        let k1 = this.keys[0], k2 = this.keys[0];
+        for(let i=0; i<this.keys.length-1; i++) {
+            if(p >= this.keys[i].t && p < this.keys[i+1].t) {
+                k1 = this.keys[i]; k2 = this.keys[i+1]; break;
             }
         }
-        
-        // Calculate percentage between keyframes
-        const localPct = (progress - k1.t) / (k2.t - k1.t);
-        
-        // Interpolate RGB values
-        const r = Math.floor(k1.c.r + (k2.c.r - k1.c.r) * localPct);
-        const g = Math.floor(k1.c.g + (k2.c.g - k1.c.g) * localPct);
-        const b = Math.floor(k1.c.b + (k2.c.b - k1.c.b) * localPct);
-        const colorStr = `rgb(${r},${g},${b})`;
-        
-        // Interpolate Light Intensity
-        const intensity = k1.i + (k2.i - k1.i) * localPct;
+        const pct = (p - k1.t) / (k2.t - k1.t);
+        const r = Math.floor(k1.c.r + (k2.c.r - k1.c.r) * pct);
+        const g = Math.floor(k1.c.g + (k2.c.g - k1.c.g) * pct);
+        const b = Math.floor(k1.c.b + (k2.c.b - k1.c.b) * pct);
+        const col = `rgb(${r},${g},${b})`;
+        const inten = k1.i + (k2.i - k1.i) * pct;
 
-        // Apply
-        this.sky.setAttribute('color', colorStr);
-        this.el.sceneEl.setAttribute('fog', `color: ${colorStr}`); // Match fog to sky
-        
-        if(this.light) this.light.setAttribute('intensity', intensity);
-        if(this.amb) this.amb.setAttribute('intensity', Math.max(0.1, intensity * 0.5));
+        this.sky.setAttribute('color', col);
+        this.el.sceneEl.setAttribute('fog', `color: ${col}`);
+        if(this.light) this.light.setAttribute('intensity', inten);
+        if(this.amb) this.amb.setAttribute('intensity', Math.max(0.2, inten * 0.5));
 
-        // Toggle Lamps (On when dark)
-        const lampsOn = intensity < 0.4;
-        this.lamps.forEach(l => l.setAttribute('visible', lampsOn));
+        // 3. Lamps
+        const lampsOn = inten < 0.4;
+        if(this.lamps) this.lamps.forEach(l => l.setAttribute('visible', lampsOn));
       }
     });
 
@@ -94,7 +82,7 @@
         this.queue = [];
         this.activeCars = [];
         this.lastClearTime = 0;
-        this.minGap = 1500; 
+        this.minGap = 1200; 
         this.lanes = [[], [], [], []]; 
       },
       registerCar(carEl, laneIdx) { this.lanes[laneIdx].push(carEl); },
@@ -139,43 +127,51 @@
     });
 
     /* ======================================================================
-       SYSTEM: ROUND-ROBIN SPAWNER (Fixes missing cars)
+       SYSTEM: CAR SPAWNER (Guaranteed Traffic)
        ====================================================================== */
     AFRAME.registerSystem('car-spawner', {
       init() {
         this.timer = 0;
-        this.interval = 2000;
-        // Explicitly defined lanes to ensure cycling works
+        this.interval = 1800; // Fast spawn rate
+        // Lane Configs: N, S, E, W
         this.configs = [
-            { id:0, axis:'z', dir:-1, color:'#c0392b' }, // N
-            { id:1, axis:'z', dir: 1, color:'#2980b9' }, // S
-            { id:2, axis:'x', dir: 1, color:'#f1c40f' }, // E
-            { id:3, axis:'x', dir:-1, color:'#8e44ad' }  // W
+            { id:0, axis:'z', dir:-1, color:'#c0392b' }, // Moves North (Coming from South)
+            { id:1, axis:'z', dir: 1, color:'#2980b9' }, // Moves South (Coming from North)
+            { id:2, axis:'x', dir: 1, color:'#f1c40f' }, // Moves East (Coming from West)
+            { id:3, axis:'x', dir:-1, color:'#8e44ad' }  // Moves West (Coming from East)
         ];
         this.idx = 0;
+        
+        // IMMEDIATE BURST: Spawn one car for EVERY lane instantly
+        setTimeout(() => {
+            for(let i=0; i<4; i++) {
+                this.spawnSpecificLane(i, 40); // Spawn them close (40m)
+            }
+        }, 100);
       },
       tick(t, dt) {
         this.timer += dt;
         if (this.timer > this.interval) {
-            this.spawn();
+            this.spawnSpecificLane(this.idx, 75); // Standard spawn distance
             this.timer = 0;
-            this.interval = 2500 + Math.random() * 1500;
+            this.interval = 2500 + Math.random() * 1000;
+            this.idx = (this.idx + 1) % 4; // Cycle 0->1->2->3->0
         }
       },
-      spawn() {
-        // SEQUENTIAL SPAWNING: 0 -> 1 -> 2 -> 3 -> 0
-        // This guarantees no lane is ever ignored.
-        const cfg = this.configs[this.idx];
-        
+      spawnSpecificLane(laneIndex, dist) {
+        const cfg = this.configs[laneIndex];
         const el = document.createElement('a-entity');
-        const colors = [cfg.color, '#ecf0f1', '#2c3e50', '#c0392b', '#e67e22'];
+        const colors = [cfg.color, '#ecf0f1', '#2c3e50', '#95a5a6', cfg.color];
         const col = colors[Math.floor(Math.random()*colors.length)];
         
-        el.setAttribute('car-logic', { axis: cfg.axis, dir: cfg.dir, color: col, laneId: cfg.id });
+        el.setAttribute('car-logic', { 
+            axis: cfg.axis, 
+            dir: cfg.dir, 
+            color: col, 
+            laneId: cfg.id,
+            startDist: dist
+        });
         this.el.appendChild(el);
-        
-        // Move to next lane
-        this.idx = (this.idx + 1) % 4;
       }
     });
 
@@ -183,26 +179,32 @@
        COMPONENT: CAR LOGIC
        ====================================================================== */
     AFRAME.registerComponent('car-logic', {
-      schema: { axis: { default: 'z' }, dir: { type: 'number' }, color: { type: 'color' }, laneId: { type: 'number' }, speed: { default: 8 } },
+      schema: { 
+          axis: { default: 'z' }, 
+          dir: { type: 'number' }, 
+          color: { type: 'color' }, 
+          laneId: { type: 'number' }, 
+          speed: { default: 8 },
+          startDist: { default: 70 }
+      },
       init() {
         this.stopTarget = 9.0; 
-        this.laneOffset = 2.2;
+        this.laneOffset = 2.2; 
         this.currentSpeed = 0;
         this.state = 'driving'; 
         this.turnProgress = 0;
-        
         const r = Math.random();
         this.intention = r < 0.45 ? 'straight' : (r < 0.75 ? 'right' : 'left');
-
         this.buildMesh();
         this.resetPosition();
-
         this.system = this.el.sceneEl.systems['traffic-manager'];
         this.system.registerCar(this.el, this.data.laneId);
-
         this.el.addEventListener('go-signal', () => {
             this.toggleSignal(true);
-            setTimeout(() => { this.state = 'crossing'; }, 600);
+            setTimeout(() => { 
+                this.state = 'crossing'; 
+                if(this.intention !== 'straight') this.setupTurn();
+            }, 600);
         });
       },
       remove() { if (this.system) this.system.unregisterCar(this.el, this.data.laneId); },
@@ -289,12 +291,16 @@
       setBrakeLights(on) { const c = on ? '#ff0000' : '#550000'; if(this.brakeL) { this.brakeL.setAttribute('color', c); this.brakeR.setAttribute('color', c); } },
       toggleSignal(on) { if(!on) { this.turnL.setAttribute('visible',false); this.turnR.setAttribute('visible',false); return; } if(this.intention==='left') this.turnL.setAttribute('visible',true); if(this.intention==='right') this.turnR.setAttribute('visible',true); },
       resetPosition() {
-        const dist = 70;
+        // Use custom startDist if provided, otherwise 70
+        const dist = this.data.startDist; 
+        
         if (this.data.axis === 'z') {
+           // Z-Axis logic (North/South)
            const x = (this.data.dir === -1) ? this.laneOffset : -this.laneOffset;
            this.el.object3D.position.set(x, 0, dist * -this.data.dir);
            this.el.object3D.rotation.y = (this.data.dir === 1) ? 0 : Math.PI;
         } else {
+           // X-Axis logic (East/West)
            const z = (this.data.dir === 1) ? this.laneOffset : -this.laneOffset;
            this.el.object3D.position.set(dist * -this.data.dir, 0, z);
            this.el.object3D.rotation.y = (this.data.dir === 1) ? -Math.PI/2 : Math.PI/2;
@@ -464,7 +470,7 @@
     <a-entity stop-sign="rot:180" position="7 0 9"></a-entity>
     <a-entity stop-sign="rot:90" position="-7 0 9"></a-entity>
 
-    <a-entity id="rig" position="-14 2 14" rotation="0 -45 0" wasd-controls trackpad-zoom>
+    <a-entity id="rig" position="-14 2 14" rotation="0 -45 0" wasd-controls="acceleration: 50" trackpad-zoom>
       <a-entity camera look-controls></a-entity>
     </a-entity>
 
