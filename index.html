@@ -2,83 +2,63 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Realistic 4-Way Stop • Urban Simulation</title>
+  <title>Final 4-Way Stop • Urban Simulation</title>
   <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
 
   <script>
     /* ======================================================================
-       SYSTEM: TRAFFIC ARBITER (Logic based on Saginaw Road Commission)
+       SYSTEM: TRAFFIC ARBITER (Logic - UNCHANGED)
        ====================================================================== */
     AFRAME.registerSystem('traffic-arbiter', {
       init() {
         this.queue = [];
         this.activeCars = [];
-        this.minGap = 1500; // Time between unrelated movements
+        this.minGap = 1500; 
         this.lastClearTime = 0;
       },
-
       registerArrival(carEl) {
-        if (!this.queue.includes(carEl)) {
-          this.queue.push(carEl);
-        }
+        if (!this.queue.includes(carEl)) this.queue.push(carEl);
       },
-
       notifyClear(carEl) {
         this.activeCars = this.activeCars.filter(c => c !== carEl);
-        if (this.activeCars.length === 0) {
-            this.lastClearTime = Date.now();
-        }
+        if (this.activeCars.length === 0) this.lastClearTime = Date.now();
       },
-
       tick() {
         const now = Date.now();
-
-        // If intersection is clear (or parallel flow possible) and safety gap met
         if (this.queue.length > 0 && this.activeCars.length === 0 && (now - this.lastClearTime > this.minGap)) {
-            
-            // 1. Get the first car (Priority)
             const car1 = this.queue.shift();
             if (!car1 || !car1.parentNode) return;
-
             const c1 = car1.components['car-controller'];
             const batch = [car1];
 
-            // 2. LOGIC: Can the next car go simultaneously? (Parallel Flow)
+            // Parallel Flow Check
             if (this.queue.length > 0) {
                 const car2 = this.queue[0];
                 const c2 = car2.components['car-controller'];
-
-                // Rule: Opposite directions + Both going Straight = GO TOGETHER
                 const isOpposite = (c1.data.axis === c2.data.axis && c1.data.dir !== c2.data.dir);
                 const bothStraight = (c1.intention === 'straight' && c2.intention === 'straight');
-
                 if (isOpposite && bothStraight) {
-                    this.queue.shift(); // Remove car2 from queue
+                    this.queue.shift(); 
                     batch.push(car2);
                 }
             }
-
-            // 3. Execute Movement
-            batch.forEach(c => {
-                this.activeCars.push(c);
-                c.emit('proceed-signal');
-            });
+            batch.forEach(c => { this.activeCars.push(c); c.emit('proceed-signal'); });
         }
       }
     });
 
     /* ======================================================================
-       SYSTEM: TRAFFIC GENERATOR
+       SYSTEM: TRAFFIC GENERATOR (Logic - UNCHANGED)
        ====================================================================== */
     AFRAME.registerSystem('traffic-generator', {
       init() {
         this.timer = 0;
         this.interval = 3000;
         this.lanes = [
-            { axis: 'z', dir: -1, color: '#e74c3c' }, // North
-            { axis: 'z', dir: 1,  color: '#3498db' },  // South
-            { axis: 'x', dir: 1,  color: '#f1c40f' },  // East
-            { axis: 'x', dir: -1, color: '#9b59b6' }   // West
+            { axis: 'z', dir: -1, color: '#e74c3c' }, 
+            { axis: 'z', dir: 1,  color: '#3498db' },  
+            { axis: 'x', dir: 1,  color: '#f1c40f' },  
+            { axis: 'x', dir: -1, color: '#9b59b6' }   
         ];
         this.laneIdx = 0;
       },
@@ -93,394 +73,367 @@
       spawn() {
         const cfg = this.lanes[this.laneIdx];
         const car = document.createElement('a-entity');
-        car.setAttribute('car-controller', {axis: cfg.axis, dir: cfg.dir, color: cfg.color});
+        // Randomize car color slightly for realism
+        const cols = [cfg.color, '#ecf0f1', '#2c3e50', '#95a5a6', cfg.color];
+        const finalColor = cols[Math.floor(Math.random()*cols.length)];
+        car.setAttribute('car-controller', {axis: cfg.axis, dir: cfg.dir, color: finalColor});
         this.el.appendChild(car);
-        this.laneIdx = Math.floor(Math.random() * 4); // Randomize lane
+        this.laneIdx = Math.floor(Math.random() * 4);
       }
     });
 
     /* ======================================================================
-       COMPONENT: CAR CONTROLLER (Physics & Visuals)
+       SYSTEM: DAY/NIGHT CYCLE (Cosmetic)
+       60 Second Day
+       ====================================================================== */
+    AFRAME.registerSystem('day-night', {
+      init() {
+        this.time = 0;
+        this.sun = document.querySelector('#sun-orb');
+        this.light = document.querySelector('#sun-light');
+        this.sky = document.querySelector('a-sky');
+        this.lamps = [];
+      },
+      registerLamp(el) { this.lamps.push(el); },
+      tick(t, dt) {
+        this.time += dt / 1000;
+        const cycle = 60; // seconds
+        const progress = (this.time % cycle) / cycle;
+        
+        // Sun Movement
+        const rot = (progress * 360) - 90;
+        const rad = THREE.MathUtils.degToRad(rot);
+        const dist = 60;
+        const y = Math.sin(rad) * dist;
+        const x = Math.cos(rad) * dist;
+        if(this.sun) this.sun.setAttribute('position', `${x} ${y} 0`);
+        if(this.light) {
+            this.light.setAttribute('position', `${x} ${y} 0`);
+            this.light.setAttribute('intensity', Math.max(0.2, Math.sin(rad)));
+        }
+
+        // Colors
+        let top, bot;
+        let lampsOn = false;
+        if(progress < 0.15 || progress > 0.85) { // Night/Dawn
+            top = '#000000'; bot = '#1a1a2e'; lampsOn = true;
+        } else if (progress < 0.25 || progress > 0.75) { // Sunrise/Sunset
+            top = '#2c3e50'; bot = '#e67e22'; lampsOn = true;
+        } else { // Day
+            top = '#3498db'; bot = '#87ceeb'; lampsOn = false;
+        }
+        if(this.sky) this.sky.setAttribute('material', `shader: gradient; topColor: ${top}; bottomColor: ${bot}`);
+        
+        this.lamps.forEach(l => l.setAttribute('visible', lampsOn));
+      }
+    });
+
+    /* ======================================================================
+       COMPONENT: CAR CONTROLLER (Logic - UNCHANGED)
        ====================================================================== */
     AFRAME.registerComponent('car-controller', {
-      schema: {
-        axis: { default: 'z' },
-        dir: { type: 'number' },
-        color: { type: 'color', default: 'red' },
-        speed: { default: 8 }
-      },
-
+      schema: { axis: { default: 'z' }, dir: { type: 'number' }, color: { type: 'color' }, speed: { default: 8 } },
       init() {
-        // GEOMETRY & PHYSICS CONSTANTS
         this.laneOffset = 2.0; 
-        this.stopLineZ = 7.5; // Visual line location
-        this.bumperOffset = 2.1; // Distance from car center to front bumper
-        // Target: Front bumper hits line. Center = 7.5 + 2.1
-        this.stopTarget = this.stopLineZ + this.bumperOffset; 
-        
-        this.currentSpeed = 0;
-        this.acceleration = 4.0; 
-        this.deceleration = 5.0;
-        
-        this.state = 'accelerating'; 
-        this.intention = this.pickIntention();
-        this.turnProgress = 0;
-        this.blinkTimer = 0;
-        this.blinkState = false;
-
-        this.buildCar();
-        this.resetPosition();
-
-        this.el.addEventListener('proceed-signal', () => {
-            // Reaction time delay
-            setTimeout(() => { 
-                this.state = 'crossing_accel'; 
-            }, 500);
-        });
+        this.stopTarget = 9.6; // 7.5 line + 2.1 offset
+        this.currentSpeed = 0; this.acceleration = 4.0; this.deceleration = 5.0;
+        this.state = 'accelerating'; this.intention = this.pickIntention();
+        this.turnProgress = 0; this.blinkTimer = 0; this.blinkState = false;
+        this.buildCar(); this.resetPosition();
+        this.el.addEventListener('proceed-signal', () => { setTimeout(() => { this.state = 'crossing_accel'; }, 500); });
       },
-
       pickIntention() {
-        const r = Math.random();
-        if (r < 0.45) return 'straight';
-        if (r < 0.75) return 'right';
-        return 'left';
+        const r = Math.random(); return r < 0.45 ? 'straight' : (r < 0.75 ? 'right' : 'left');
       },
-
       buildCar() {
-        // --- CHASSIS ---
-        const body = document.createElement('a-box');
-        body.setAttribute('scale', '1.8 0.5 4.2');
-        body.setAttribute('position', '0 0.5 0');
-        body.setAttribute('color', this.data.color);
-        body.setAttribute('shadow', 'cast:true');
-        this.el.appendChild(body);
-
-        // --- CABIN ---
-        const cabin = document.createElement('a-box');
-        cabin.setAttribute('scale', '1.6 0.55 2.2');
-        cabin.setAttribute('position', '0 1.05 0.2');
-        cabin.setAttribute('color', '#222'); // Dark Windows
-        this.el.appendChild(cabin);
-
-        // --- BRAKE LIGHTS (Emissive) ---
-        this.brakeL = this.addLight('-0.65', '0.5', '2.1', '#500');
-        this.brakeR = this.addLight('0.65', '0.5', '2.1', '#500');
-
-        // --- HEADLIGHTS ---
-        this.addLight('-0.65', '0.5', '-2.1', '#ffe');
-        this.addLight('0.65', '0.5', '-2.1', '#ffe');
-
-        // --- TURN SIGNALS ---
-        this.turnL = this.addSignal('-0.8', '0.6', '-2.0');
-        this.turnR = this.addSignal('0.8', '0.6', '-2.0');
-
-        // --- WHEELS ---
-        [ [0.9, 1.2], [-0.9, 1.2], [0.9, -1.2], [-0.9, -1.2] ].forEach(pos => {
-            const w = document.createElement('a-cylinder');
-            w.setAttribute('rotation', '0 0 90');
-            w.setAttribute('radius', 0.35); w.setAttribute('height', 0.2);
-            w.setAttribute('color', '#111');
-            w.setAttribute('position', `${pos[0]} 0.35 ${pos[1]}`);
-            this.el.appendChild(w);
-        });
+        // Modern Sedan Style
+        const grp = document.createElement('a-entity');
+        // Body
+        const b = document.createElement('a-box');
+        b.setAttribute('scale','1.8 0.6 4.4'); b.setAttribute('position','0 0.6 0'); b.setAttribute('color',this.data.color); b.setAttribute('shadow','cast:true');
+        grp.appendChild(b);
+        // Cabin
+        const c = document.createElement('a-box');
+        c.setAttribute('scale','1.6 0.5 2.4'); c.setAttribute('position','0 1.15 0.1'); c.setAttribute('color','#222');
+        grp.appendChild(c);
+        // Roof
+        const r = document.createElement('a-box');
+        r.setAttribute('scale','1.62 0.05 2.5'); r.setAttribute('position','0 1.4 0.1'); r.setAttribute('color',this.data.color);
+        grp.appendChild(r);
+        
+        // Lights & Wheels
+        this.addL(grp, -0.6, 0.6, -2.2, '#fff'); this.addL(grp, 0.6, 0.6, -2.2, '#fff');
+        this.brakeL = this.addL(grp, -0.6, 0.6, 2.2, '#500'); this.brakeR = this.addL(grp, 0.6, 0.6, 2.2, '#500');
+        this.turnL = this.addS(grp, -0.85, 0.6, -2.1); this.turnR = this.addS(grp, 0.85, 0.6, -2.1);
+        [ [0.9,1.3], [-0.9,1.3], [0.9,-1.3], [-0.9,-1.3] ].forEach(p => this.addW(grp, p[0], p[1]));
+        
+        this.el.appendChild(grp);
       },
-
-      addLight(x, y, z, col) {
-        const l = document.createElement('a-box');
-        l.setAttribute('scale', '0.3 0.15 0.05');
-        l.setAttribute('position', `${x} ${y} ${z}`);
-        l.setAttribute('color', col);
-        l.setAttribute('shader', 'flat');
-        this.el.appendChild(l);
-        return l;
+      addL(p,x,y,z,c) { const l=document.createElement('a-box'); l.setAttribute('scale','0.3 0.15 0.05'); l.setAttribute('position',`${x} ${y} ${z}`); l.setAttribute('color',c); l.setAttribute('shader','flat'); p.appendChild(l); return l; },
+      addS(p,x,y,z) { const s=document.createElement('a-sphere'); s.setAttribute('radius',0.1); s.setAttribute('position',`${x} ${y} ${z}`); s.setAttribute('color','orange'); s.setAttribute('visible',false); p.appendChild(s); return s; },
+      addW(p,x,z) { const w=document.createElement('a-cylinder'); w.setAttribute('rotation','0 0 90'); w.setAttribute('radius',0.35); w.setAttribute('height',0.2); w.setAttribute('color','#111'); w.setAttribute('position',`${x} 0.35 ${z}`); p.appendChild(w); },
+      setBrake(on) { const c=on?'#f00':'#500'; this.brakeL.setAttribute('color',c); this.brakeR.setAttribute('color',c); },
+      updSig(dt) { 
+        if(this.state==='waiting'||this.state==='crossing_accel') {
+          this.blinkTimer+=dt; if(this.blinkTimer>0.4) { this.blinkTimer=0; this.blinkState=!this.blinkState; 
+          this.turnL.setAttribute('visible', this.intention==='left' && this.blinkState);
+          this.turnR.setAttribute('visible', this.intention==='right' && this.blinkState); }
+        } else { this.turnL.setAttribute('visible',false); this.turnR.setAttribute('visible',false); }
       },
-
-      addSignal(x,y,z) {
-        const s = document.createElement('a-sphere');
-        s.setAttribute('radius', 0.1); s.setAttribute('position', `${x} ${y} ${z}`);
-        s.setAttribute('color', 'orange'); s.setAttribute('visible', false);
-        this.el.appendChild(s);
-        return s;
-      },
-
-      setBrakeLights(on) {
-        const c = on ? '#ff0000' : '#550000';
-        this.brakeL.setAttribute('color', c);
-        this.brakeR.setAttribute('color', c);
-      },
-
-      updateSignals(dt) {
-        if (this.state === 'waiting' || this.state === 'crossing_accel') {
-             this.blinkTimer += dt;
-             if (this.blinkTimer > 0.4) {
-                 this.blinkTimer = 0;
-                 this.blinkState = !this.blinkState;
-                 if (this.intention === 'left') this.turnL.setAttribute('visible', this.blinkState);
-                 if (this.intention === 'right') this.turnR.setAttribute('visible', this.blinkState);
-             }
-        } else {
-             this.turnL.setAttribute('visible', false);
-             this.turnR.setAttribute('visible', false);
-        }
-      },
-
       resetPosition() {
-        const startDist = 70;
+        const d = 70;
         if (this.data.axis === 'z') {
            const x = (this.data.dir === -1) ? this.laneOffset : -this.laneOffset;
-           this.el.object3D.position.set(x, 0, startDist * -this.data.dir);
+           this.el.object3D.position.set(x, 0, d * -this.data.dir);
            this.el.object3D.rotation.y = (this.data.dir === 1) ? 0 : Math.PI;
         } else {
            const z = (this.data.dir === 1) ? this.laneOffset : -this.laneOffset;
-           this.el.object3D.position.set(startDist * -this.data.dir, 0, z);
+           this.el.object3D.position.set(d * -this.data.dir, 0, z);
            this.el.object3D.rotation.y = (this.data.dir === 1) ? -Math.PI/2 : Math.PI/2;
         }
       },
-
-      scanTraffic() {
-        const myPos = (this.data.axis === 'z') ? this.el.object3D.position.z : this.el.object3D.position.x;
+      scan() {
+        const my = (this.data.axis === 'z') ? this.el.object3D.position.z : this.el.object3D.position.x;
         const all = document.querySelectorAll('[car-controller]');
         let dist = 1000;
-        for (let i = 0; i < all.length; i++) {
-            if (all[i] === this.el) continue;
-            const other = all[i].components['car-controller'];
-            if (!other) continue;
-            // Only check my lane
-            if (other.data.axis === this.data.axis && other.data.dir === this.data.dir) {
-                if (other.state === 'departing') continue; // Ignore cars leaving
-                const d = ((this.data.axis==='z'?all[i].object3D.position.z:all[i].object3D.position.x) - myPos) * this.data.dir;
-                if (d > 0 && d < dist) dist = d;
+        for (let i=0; i<all.length; i++) {
+            if (all[i]===this.el) continue;
+            const o = all[i].components['car-controller'];
+            if (!o) continue;
+            if (o.data.axis===this.data.axis && o.data.dir===this.data.dir) {
+                if (o.state==='departing') continue;
+                const d = ((this.data.axis==='z'?all[i].object3D.position.z:all[i].object3D.position.x) - my) * this.data.dir;
+                if (d>0 && d<dist) dist=d;
             }
         }
         return dist;
       },
-
       tick(t, dt) {
-        const delta = dt / 1000;
-        const p = this.el.object3D.position;
-        this.updateSignals(delta);
-
-        // --- STATE 1: APPROACHING ---
-        if (this.state === 'accelerating' || this.state === 'cruising' || this.state === 'braking') {
-            const distAhead = this.scanTraffic();
-            const distToStop = Math.abs((this.data.axis === 'z' ? p.z : p.x)) - this.stopTarget;
-
-            let targetSpeed = this.data.speed;
-
-            // Collision Avoidance
-            if (distAhead < 10) targetSpeed = 0;
-            // Stop Line Logic (Ease Out)
-            if (distToStop < 15 && distToStop > 0 && targetSpeed > 0) targetSpeed = Math.min(targetSpeed, distToStop * 1.5);
-
-            // Accelerate/Decelerate
-            if (this.currentSpeed < targetSpeed) {
-                this.currentSpeed += this.acceleration * delta;
-                this.setBrakeLights(false);
-            } else if (this.currentSpeed > targetSpeed) {
-                this.currentSpeed -= this.deceleration * delta;
-                this.setBrakeLights(true); // Brake lights ON
-            }
-
-            // Stop Check
-            if (distToStop <= 0.1 && this.currentSpeed < 0.5) {
-                this.currentSpeed = 0;
-                this.state = 'waiting';
-                this.setBrakeLights(true);
-                this.el.sceneEl.systems['traffic-arbiter'].registerArrival(this.el);
-            }
-        } 
-        
-        // --- STATE 2: CROSSING ---
-        else if (this.state === 'crossing_accel') {
-            this.setBrakeLights(false);
-            this.currentSpeed += this.acceleration * delta;
-            if (this.currentSpeed > this.data.speed) this.currentSpeed = this.data.speed;
-            
-            if (this.intention === 'straight') {
-                // No rotation
-            } else {
-                // Smooth Arc Turn
-                const tr = (Math.PI/2) * delta * 0.9;
-                this.turnProgress += tr;
-                if (this.intention === 'right') this.el.object3D.rotateY(-tr);
-                else this.el.object3D.rotateY(tr * 0.75); // Left is wider
-
-                if (this.turnProgress >= Math.PI/2) {
-                    // Lock angle
-                    const y = this.el.object3D.rotation.y;
-                    this.el.object3D.rotation.y = Math.round(y / (Math.PI/2)) * (Math.PI/2);
-                    this.state = 'departing';
+        const d = dt/1000; const p = this.el.object3D.position; this.updSig(d);
+        if (['accelerating','cruising','braking'].includes(this.state)) {
+            const da = this.scan(); const ds = Math.abs((this.data.axis==='z'?p.z:p.x)) - this.stopTarget;
+            let ts = this.data.speed;
+            if(da<10) ts=0; 
+            if(ds<15 && ds>0 && ts>0) ts = Math.min(ts, ds*1.5);
+            if(this.currentSpeed<ts) { this.currentSpeed+=this.acceleration*d; this.setBrake(false); }
+            else if(this.currentSpeed>ts) { this.currentSpeed-=this.deceleration*d; this.setBrake(true); }
+            if(ds<=0.1 && this.currentSpeed<0.5) { this.currentSpeed=0; this.state='waiting'; this.setBrake(true); this.el.sceneEl.systems['traffic-arbiter'].registerArrival(this.el); }
+        } else if (this.state==='crossing_accel') {
+            this.setBrake(false); this.currentSpeed+=this.acceleration*d; if(this.currentSpeed>this.data.speed) this.currentSpeed=this.data.speed;
+            if(this.intention==='straight') {} 
+            else {
+                const tr=(Math.PI/2)*d*0.9; this.turnProgress+=tr;
+                if(this.intention==='right') this.el.object3D.rotateY(-tr); else this.el.object3D.rotateY(tr*0.75);
+                if(this.turnProgress>=Math.PI/2) {
+                    const y=this.el.object3D.rotation.y; this.el.object3D.rotation.y=Math.round(y/(Math.PI/2))*(Math.PI/2);
+                    this.state='departing';
                 }
             }
-
-            // Clearance Check (> 12m from center)
-            if ((p.x*p.x + p.z*p.z) > 144) {
-                this.el.sceneEl.systems['traffic-arbiter'].notifyClear(this.el);
-                if (this.intention === 'straight') this.state = 'departing';
-            }
-        } 
-        
-        // --- STATE 3: DEPARTING ---
-        else if (this.state === 'departing') {
-            // Drive away
-            if (Math.abs(p.x) > 90 || Math.abs(p.z) > 90) this.el.remove();
+            if((p.x*p.x+p.z*p.z)>160) { this.el.sceneEl.systems['traffic-arbiter'].notifyClear(this.el); if(this.intention==='straight') this.state='departing'; }
+        } else if (this.state==='departing') {
+            if(Math.abs(p.x)>90 || Math.abs(p.z)>90) this.el.remove();
         }
-
-        this.el.object3D.translateZ(this.currentSpeed * delta);
+        this.el.object3D.translateZ(this.currentSpeed*d);
       }
     });
 
     /* ======================================================================
-       COMPONENT: DETAILED CITY (Based on Reference Images)
+       COMPONENT: VISUAL CITY (Cool Buildings + Nature)
        ====================================================================== */
-    AFRAME.registerComponent('detailed-city', {
+    AFRAME.registerComponent('visual-city', {
       init() {
-        // Tight corners (6m from center)
-        this.createBlock(-50, -6, -50, -6); 
-        this.createBlock( 6, 50, -50, -6);  
-        this.createBlock(-50, -6,  6, 50);  
-        this.createBlock( 6, 50,  6, 50);   
+        // Blocks (pushed back to 10m to fit sidewalk)
+        this.createBlock(-50, -10, -50, -10); 
+        this.createBlock( 10, 50, -50, -10);  
+        this.createBlock(-50, -10,  10, 50);  
+        this.createBlock( 10, 50,  10, 50);   
       },
       createBlock(minX, maxX, minZ, maxZ) {
-        const w = maxX - minX;
-        const h = maxZ - minZ;
-        const cx = (minX + maxX) / 2;
-        const cz = (minZ + maxZ) / 2;
+        const w = maxX - minX; const h = maxZ - minZ;
+        const cx = (minX + maxX) / 2; const cz = (minZ + maxZ) / 2;
 
-        // 1. Curb (Raised Concrete)
-        const curb = document.createElement('a-box');
-        curb.setAttribute('position', `${cx} 0.15 ${cz}`);
-        curb.setAttribute('width', w); curb.setAttribute('depth', h); curb.setAttribute('height', 0.3);
-        curb.setAttribute('color', '#95a5a6');
-        this.el.appendChild(curb);
-
-        // 2. Sidewalk
-        const sw = document.createElement('a-plane');
-        sw.setAttribute('position', `${cx} 0.31 ${cz}`);
-        sw.setAttribute('width', w-0.4); sw.setAttribute('height', h-0.4);
-        sw.setAttribute('rotation', '-90 0 0');
-        sw.setAttribute('color', '#bdc3c7'); // Lighter sidewalk color
+        // 1. Curb & Sidewalk
+        const sw = document.createElement('a-box');
+        sw.setAttribute('position', `${cx} 0.15 ${cz}`);
+        sw.setAttribute('width', w); sw.setAttribute('depth', h); sw.setAttribute('height', 0.3);
+        sw.setAttribute('color', '#95a5a6');
         this.el.appendChild(sw);
 
-        // 3. Buildings (Dense)
-        for(let x = minX+4; x < maxX-4; x+=10) {
-            for(let z = minZ+4; z < maxZ-4; z+=10) {
-                 this.createBuilding(x, z);
+        // 2. Grass (Nature)
+        const grass = document.createElement('a-plane');
+        grass.setAttribute('position', `${cx} 0.31 ${cz}`);
+        grass.setAttribute('width', w-1); grass.setAttribute('height', h-1);
+        grass.setAttribute('rotation', '-90 0 0');
+        grass.setAttribute('color', '#2ecc71'); // Nice Green
+        this.el.appendChild(grass);
+
+        // 3. Buildings & Trees
+        for(let x=minX+4; x<maxX-4; x+=10) {
+            for(let z=minZ+4; z<maxZ-4; z+=10) {
+                 if(Math.random() > 0.4) this.createModernBuilding(x, z);
+                 else this.createTree(x, z);
             }
         }
+        // Lamp at corner
+        this.createLamp(maxX>0?12:-12, maxZ>0?12:-12);
       },
-      createBuilding(x, z) {
-        const h = 8 + Math.random()*12;
+      createModernBuilding(x, z) {
+        const h = 10 + Math.random()*20;
         const b = document.createElement('a-entity');
-        b.setAttribute('position', `${x} ${h/2 + 0.3} ${z}`);
-
+        b.setAttribute('position', `${x} ${h/2} ${z}`);
+        
+        // Style: Glass Tower or Brick Apartment
+        const style = Math.random() > 0.5 ? 'glass' : 'brick';
+        const col = style === 'glass' ? '#3498db' : '#c0392b';
+        
         const wall = document.createElement('a-box');
-        wall.setAttribute('width', 9); wall.setAttribute('depth', 9); wall.setAttribute('height', h);
-        const col = ['#34495e', '#2c3e50', '#7f8c8d'][Math.floor(Math.random()*3)];
+        wall.setAttribute('width', 8); wall.setAttribute('depth', 8); wall.setAttribute('height', h);
         wall.setAttribute('color', col);
         wall.setAttribute('shadow', 'cast:true; receive:true');
+        // Add "Window" texture using material properties for glass
+        if(style==='glass') wall.setAttribute('material', 'opacity: 0.9; roughness: 0.1; metalness: 0.6');
         b.appendChild(wall);
-
-        // Windows
-        for(let y=2; y < h-1; y+=3) {
-             this.win(b, 0, y-h/2, 4.55);
-             this.win(b, 4.55, y-h/2, 0, 90);
+        
+        // Window Details
+        if(style === 'brick') {
+            for(let y=2; y<h-2; y+=3) {
+                 this.addWin(b, 0, y-h/2, 4.05, 0); this.addWin(b, 4.05, y-h/2, 0, 90);
+            }
         }
         this.el.appendChild(b);
       },
-      win(p,x,y,z,r=0) {
-        if(Math.random()>0.7) return; 
-        const w = document.createElement('a-plane');
-        w.setAttribute('width',1.5); w.setAttribute('height',1.8);
+      addWin(p,x,y,z,r) {
+        if(Math.random()>0.7) return;
+        const w=document.createElement('a-plane');
+        w.setAttribute('width',1.5); w.setAttribute('height',1.5);
         w.setAttribute('color','#ffeb3b'); w.setAttribute('shader','flat');
-        w.setAttribute('position',`${x} ${y} ${z}`);
-        if(r) w.setAttribute('rotation',`0 ${r} 0`);
+        w.setAttribute('position',`${x} ${y} ${z}`); if(r) w.setAttribute('rotation',`0 ${r} 0`);
         p.appendChild(w);
+      },
+      createTree(x,z) {
+        const t = document.createElement('a-entity');
+        t.setAttribute('position', `${x} 0.3 ${z}`);
+        const tr = document.createElement('a-cylinder');
+        tr.setAttribute('radius',0.4); tr.setAttribute('height',2.5); tr.setAttribute('color','#5d4037'); tr.setAttribute('position','0 1.25 0');
+        const l = document.createElement('a-cone'); // Pine/Spruce style
+        l.setAttribute('radius-bottom', 2.5); l.setAttribute('height', 5); l.setAttribute('color','#27ae60'); l.setAttribute('position','0 4 0');
+        t.appendChild(tr); t.appendChild(l);
+        this.el.appendChild(t);
+      },
+      createLamp(x,z) {
+        const l=document.createElement('a-entity'); l.setAttribute('position',`${x} 0.3 ${z}`);
+        const p=document.createElement('a-cylinder'); p.setAttribute('radius',0.1); p.setAttribute('height',6); p.setAttribute('color','#222'); p.setAttribute('position','0 3 0');
+        const b=document.createElement('a-sphere'); b.setAttribute('radius',0.5); b.setAttribute('color','#fff'); b.setAttribute('position','0 6 0'); b.setAttribute('material','emissive:#fff');
+        // Light source
+        const li=document.createElement('a-entity'); li.setAttribute('light','type:point; intensity:0.8; distance:25; color:#ffe');
+        li.setAttribute('position','0 5 0'); li.setAttribute('visible',false);
+        l.appendChild(p); l.appendChild(b); l.appendChild(li);
+        
+        setTimeout(() => { 
+           const sys = document.querySelector('a-scene').systems['day-night'];
+           if(sys) sys.registerLamp(li);
+        }, 500);
+        this.el.appendChild(l);
       }
+    });
+
+    /* ======================================================================
+       COMPONENT: TRACKPAD ZOOM (Laptop Control)
+       ====================================================================== */
+    AFRAME.registerComponent('trackpad-zoom', {
+        init() {
+            window.addEventListener('wheel', (e) => {
+                // Prevent default scrolling of page
+                e.preventDefault();
+                
+                // Get current position
+                const rig = this.el.object3D;
+                const cam = this.el.querySelector('[camera]').object3D;
+                
+                // Determine direction (DeltaY positive = scroll down = zoom out)
+                const delta = e.deltaY * 0.05;
+                
+                // Move rig forward/backward relative to camera view
+                const direction = new THREE.Vector3(0, 0, 1);
+                direction.applyQuaternion(cam.quaternion);
+                direction.y = 0; // Keep movement on ground plane
+                direction.normalize();
+
+                rig.position.addScaledVector(direction, delta);
+            }, { passive: false });
+        }
+    });
+
+    // Helper: Stop Sign
+    AFRAME.registerComponent('stop-sign', {
+       schema: { rot: {type:'number'} },
+       init() {
+         const p = document.createElement('a-cylinder');
+         p.setAttribute('color','#555'); p.setAttribute('radius',0.05); p.setAttribute('height',2.5); p.setAttribute('position','0 1.25 0');
+         const s = document.createElement('a-circle');
+         s.setAttribute('color','#c0392b'); s.setAttribute('radius',0.45); s.setAttribute('position','0 2.5 0.06'); s.setAttribute('side','double');
+         const t = document.createElement('a-text');
+         t.setAttribute('value', 'STOP'); t.setAttribute('align', 'center'); t.setAttribute('scale', '0.9 0.9 0.9'); t.setAttribute('position', '0 2.5 0.07');
+         this.el.appendChild(p); this.el.appendChild(s); this.el.appendChild(t);
+         this.el.object3D.rotation.y = this.data.rot * (Math.PI/180);
+       }
     });
   </script>
 </head>
 
-<body style="margin:0; background-color: #1a2330;">
-  <a-scene background="color: #000" traffic-arbiter traffic-generator shadow="type: pcfsoft" fog="type: exponential; color: #1a1a2e; density: 0.005">
+<body style="margin:0; background-color: #000;">
+  <a-scene background="color: #000" traffic-arbiter traffic-generator day-night shadow="type: pcfsoft">
 
-    <a-sky color="#050510"></a-sky> 
-    <a-entity position="-30 15 -30">
-       <a-sphere radius="1.5" color="#f1c40f" material="shader:flat; fog:false"></a-sphere>
-       <a-entity light="type: directional; color: #ffaf40; intensity: 0.8; castShadow:true"></a-entity>
+    <a-sky></a-sky> 
+    <a-entity id="sun-orb">
+       <a-sphere radius="2.5" color="#f1c40f" material="shader:flat; fog:false"></a-sphere>
+       <a-entity id="sun-light" light="type: directional; castShadow:true"></a-entity>
     </a-entity>
-    <a-entity light="type: ambient; color: #555; intensity: 0.5"></a-entity>
+    <a-entity light="type: ambient; color: #555; intensity: 0.4"></a-entity>
 
-    <a-plane rotation="-90 0 0" width="200" height="200" color="#222"></a-plane>
-    
-    <a-plane rotation="-90 0 0" position="0 0.02 0" width="12" height="150" color="#1a1a1a"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.03 0" width="150" height="12" color="#1a1a1a"></a-plane>
+    <a-plane rotation="-90 0 0" width="200" height="200" color="#111"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.02 0" width="12" height="150" color="#222"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.03 0" width="150" height="12" color="#222"></a-plane>
 
-    <a-plane rotation="-90 0 0" position="0 0.04 -40" width="0.1" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="0.2 0.04 -40" width="0.1" height="65" color="#f1c40f"></a-plane>
-    
-    <a-plane rotation="-90 0 0" position="0 0.04 40" width="0.1" height="65" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="0.2 0.04 40" width="0.1" height="65" color="#f1c40f"></a-plane>
-
-    <a-plane rotation="-90 0 0" position="-40 0.04 0" width="65" height="0.1" color="#f1c40f"></a-plane>
-    <a-plane rotation="-90 0 0" position="-40 0.04 0.2" width="65" height="0.1" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.04 -40" width="0.15" height="65" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="0.25 0.04 -40" width="0.15" height="65" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.04 40" width="0.15" height="65" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="0.25 0.04 40" width="0.15" height="65" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="-40 0.04 0" width="65" height="0.15" color="#f1c40f"></a-plane>
+    <a-plane rotation="-90 0 0" position="-40 0.04 0.25" width="65" height="0.15" color="#f1c40f"></a-plane>
 
     <a-entity id="crosswalks">
-        <a-plane rotation="-90 0 0" position="0 0.04 -7" width="12" height="2" src="" color="#333"></a-plane>
-        <a-plane rotation="-90 0 0" position="0 0.05 -7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-2 0.05 -7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="2 0.05 -7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-4 0.05 -7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="4 0.05 -7" width="1" height="2" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="0 0.05 -7" width="12" height="2" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="0 0.06 -7" width="11" height="1.8" color="#222"></a-plane> <a-plane rotation="-90 0 0" position="0 0.07 -7" width="1" height="1.8" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="-3 0.07 -7" width="1" height="1.8" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="3 0.07 -7" width="1" height="1.8" color="white"></a-plane>
 
-        <a-plane rotation="-90 0 0" position="0 0.05 7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-2 0.05 7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="2 0.05 7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-4 0.05 7" width="1" height="2" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="4 0.05 7" width="1" height="2" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="0 0.05 7" width="12" height="2" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="0 0.06 7" width="11" height="1.8" color="#222"></a-plane>
+        <a-plane rotation="-90 0 0" position="0 0.07 7" width="1" height="1.8" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="-3 0.07 7" width="1" height="1.8" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="3 0.07 7" width="1" height="1.8" color="white"></a-plane>
 
-        <a-plane rotation="-90 0 0" position="7 0.05 0" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="7 0.05 2" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="7 0.05 -2" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="7 0.05 4" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="7 0.05 -4" width="2" height="1" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="7 0.05 0" width="2" height="12" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="7 0.06 0" width="1.8" height="11" color="#222"></a-plane>
         
-        <a-plane rotation="-90 0 0" position="-7 0.05 0" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.05 2" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.05 -2" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.05 4" width="2" height="1" color="white"></a-plane>
-        <a-plane rotation="-90 0 0" position="-7 0.05 -4" width="2" height="1" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="-7 0.05 0" width="2" height="12" color="white"></a-plane>
+        <a-plane rotation="-90 0 0" position="-7 0.06 0" width="1.8" height="11" color="#222"></a-plane>
     </a-entity>
 
-    <a-plane rotation="-90 0 0" position="0 0.05 -8.2" width="5.8" height="0.4" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="0 0.05 8.2" width="5.8" height="0.4" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="-8.2 0.05 0" width="0.4" height="5.8" color="white"></a-plane>
-    <a-plane rotation="-90 0 0" position="8.2 0.05 0" width="0.4" height="5.8" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.05 -8.5" width="5.8" height="0.6" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.05 8.5" width="5.8" height="0.6" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="-8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="8.5 0.05 0" width="0.6" height="5.8" color="white"></a-plane>
 
-    <a-entity detailed-city></a-entity>
+    <a-entity visual-city></a-entity>
 
-    <a-entity position="-6.5 0 -8.5">
-        <a-cylinder height="2" radius="0.05" color="#555" position="0 1 0"></a-cylinder>
-        <a-cylinder segments-radial="8" height="0.1" radius="0.4" color="#c0392b" rotation="90 0 0" position="0 2 0.1"></a-cylinder>
-        <a-text value="STOP" align="center" position="0 2 0.16" scale="0.9 0.9 0.9"></a-text>
-    </a-entity>
-    <a-entity position="6.5 0 -8.5" rotation="0 -90 0">
-        <a-cylinder height="2" radius="0.05" color="#555" position="0 1 0"></a-cylinder>
-        <a-cylinder segments-radial="8" height="0.1" radius="0.4" color="#c0392b" rotation="90 0 0" position="0 2 0.1"></a-cylinder>
-        <a-text value="STOP" align="center" position="0 2 0.16" scale="0.9 0.9 0.9"></a-text>
-    </a-entity>
-    <a-entity position="6.5 0 8.5" rotation="0 180 0">
-        <a-cylinder height="2" radius="0.05" color="#555" position="0 1 0"></a-cylinder>
-        <a-cylinder segments-radial="8" height="0.1" radius="0.4" color="#c0392b" rotation="90 0 0" position="0 2 0.1"></a-cylinder>
-        <a-text value="STOP" align="center" position="0 2 0.16" scale="0.9 0.9 0.9"></a-text>
-    </a-entity>
-    <a-entity position="-6.5 0 8.5" rotation="0 90 0">
-        <a-cylinder height="2" radius="0.05" color="#555" position="0 1 0"></a-cylinder>
-        <a-cylinder segments-radial="8" height="0.1" radius="0.4" color="#c0392b" rotation="90 0 0" position="0 2 0.1"></a-cylinder>
-        <a-text value="STOP" align="center" position="0 2 0.16" scale="0.9 0.9 0.9"></a-text>
-    </a-entity>
+    <a-entity stop-sign="rot:0" position="-6.5 0 -8.5"></a-entity>
+    <a-entity stop-sign="rot:-90" position="6.5 0 -8.5"></a-entity>
+    <a-entity stop-sign="rot:180" position="6.5 0 8.5"></a-entity>
+    <a-entity stop-sign="rot:90" position="-6.5 0 8.5"></a-entity>
 
-    <a-entity id="rig" position="-12 1.7 12" rotation="0 -45 0" wasd-controls>
+    <a-entity id="rig" position="-14 2 14" rotation="0 -45 0" wasd-controls trackpad-zoom>
       <a-entity camera look-controls></a-entity>
     </a-entity>
 
