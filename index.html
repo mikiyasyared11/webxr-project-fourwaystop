@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>4-Way Stop • Continuous Flow</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+
+  <script>
+    /* ======================================================================
+       SYSTEM: TRAFFIC CONTROLLER
+       Manages the intersection with a Safety Timer to prevent gridlock.
+       ====================================================================== */
+    AFRAME.registerSystem('traffic-controller', {
+      init() {
+        this.queue = [];
+        this.activeCar = null;
+        this.lastClearTime = 0;
+        this.activeCarStartTime = 0;
+        this.minHoldTime = 1000; // 1 second wait between turns
+        this.maxCrossingTime = 5000; // 5 seconds max allowed in box
+      },
+      requestEntry(carEl) {
+        if (!this.queue.includes(carEl)) {
+            this.queue.push(carEl);
+        }
+      },
+      reportClear(carEl) {
+        if (this.activeCar === carEl) {
+          this.activeCar = null;
+          this.lastClearTime = Date.now();
+        }
+      },
+      tick() {
+        const now = Date.now();
+
+        // SAFETY CHECK: If a car is stuck in the intersection for > 5 seconds, force reset.
+        if (this.activeCar && (now - this.activeCarStartTime > this.maxCrossingTime)) {
+             console.log("Clearing stuck car to keep traffic moving.");
+             this.activeCar = null;
+             this.lastClearTime = now;
+        }
+
+        // GREEN LIGHT LOGIC
+        if (!this.activeCar && (now - this.lastClearTime > this.minHoldTime) && this.queue.length > 0) {
+          // Get next car
+          const nextCar = this.queue.shift();
+          
+          // Ensure car is valid (not deleted)
+          if (nextCar && nextCar.parentNode) {
+            this.activeCar = nextCar;
+            this.activeCarStartTime = now;
+            nextCar.emit('green-light');
+          }
+        }
+      }
+    });
+
+    /* ======================================================================
+       SYSTEM: CAR SPAWNER
+       Spawns cars at regular intervals to maintain continuous flow.
+       ====================================================================== */
+    AFRAME.registerSystem('car-spawner', {
+        init() {
+            this.sceneEl = this.el;
+            this.nextSpawnTime = 0;
+            this.spawnInterval = 3500; // New car every 3.5 seconds
+            
+            this.laneConfigs = [
+                { axis: 'z', dir: -1, color: '#e74c3c' }, // Northbound
+                { axis: 'z', dir: 1,  color: '#3498db' },  // Southbound
+                { axis: 'x', dir: 1,  color: '#f1c40f' },  // Eastbound
+                { axis: 'x', dir: -1, color: '#9b59b6' }   // Westbound
+            ];
+            this.laneIndex = 0;
+        },
+        tick(time) {
+            if (time > this.nextSpawnTime) {
+                this.spawnCar(this.laneConfigs[this.laneIndex]);
+                // Add variance so cars don't spawn identically
+                const variance = Math.random() * 1000;
+                this.nextSpawnTime = time + this.spawnInterval + variance;
+                this.laneIndex = (this.laneIndex + 1) % this.laneConfigs.length;
+            }
+        },
+        spawnCar(config) {
+            const carEl = document.createElement('a-entity');
+            carEl.setAttribute('car', { axis: config.axis, dir: config.dir, color: config.color });
+            this.sceneEl.appendChild(carEl);
+        }
+    });
+
+    /* ======================================================================
+       COMPONENT: CAR (AI)
+       Handles Driving, Stop Signs, Queueing, and Turning.
+       ====================================================================== */
+    AFRAME.registerComponent('car', {
+      schema: {
+        axis: { default: 'z' },   
+        dir: { type: 'number' },  
+        speed: { type: 'number', default: 7 }, // Faster speed for better flow
+        color: { type: 'color', default: 'red' }
+      },
+
+      init() {
+        this.laneOffset = 2.0; 
+        this.stopLine = 6.5;   
+        
+        this.buildModel();
+
+        // States: driving -> queued -> arriving -> waiting -> crossing -> departing
+        this.state = 'driving'; 
+        this.turnProgress = 0;
+        this.pickIntention(); // Randomly choose Straight/Left/Right
+
+        // Event Listener for Green Light
+        this.el.addEventListener('green-light', () => {
+          // Small delay to simulate driver reaction
+          setTimeout(() => {
+             this.state = 'crossing';
+          }, 300);
+        });
+
+        this.setInitialPosition();
+      },
+
+      buildModel() {
+        const body = document.createElement('a-box');
+        body.setAttribute('color', this.data.color);
+        body.setAttribute('scale', '1.6 0.7 3.5');
+        body.setAttribute('position', '0 0.6 0');
+        body.setAttribute('shadow', 'cast:true; receive:false');
+        
+        const cabin = document.createElement('a-box');
+        cabin.setAttribute('color', '#333');
+        cabin.setAttribute('scale', '1.4 0.6 1.8');
+        cabin.setAttribute('position', '0 1.3 0');
+
+        this.el.appendChild(body);
+        this.el.appendChild(cabin);
+      },
+
+      setInitialPosition() {
+        const startDist = 65; 
+        if (this.data.axis === 'z') {
+           const xPos = (this.data.dir === -1) ? this.laneOffset : -this.laneOffset;
+           this.el.object3D.position.set(xPos, 0, startDist * -this.data.dir);
+           this.el.object3D.rotation.y = (this.data.dir === 1) ? 0 : Math.PI;
+        } else {
+           const zPos = (this.data.dir === 1) ? this.laneOffset : -this.laneOffset;
+           this.el.object3D.position.set(startDist * -this.data.dir, 0, zPos);
+           this.el.object3D.rotation.y = (this.data.dir === 1) ? -Math.PI/2 : Math.PI/2;
+        }
+      },
+
+      pickIntention() {
+        const r = Math.random();
+        if(r < 0.4) this.intention = 'straight';
+        else if (r < 0.7) this.intention = 'right';
+        else this.intention = 'left';
+      },
+
+      checkTrafficAhead() {
+        // Returns distance to car in front (if any)
+        const myPos = (this.data.axis === 'z') ? this.el.object3D.position.z : this.el.object3D.position.x;
+        const allCars = document.querySelectorAll('[car]');
+        let distToCarAhead = 1000;
+
+        allCars.forEach(other => {
+            if (other === this.el) return;
+            const otherComp = other.components.car;
+            if(!otherComp) return;
+
+            // Ignore cars that are already moving through intersection
+            if(otherComp.state === 'crossing' || otherComp.state === 'departing') return;
+
+            // Only check cars in MY lane
+            if (otherComp.data.axis === this.data.axis && otherComp.data.dir === this.data.dir) {
+                const otherPos = (this.data.axis === 'z') ? other.object3D.position.z : other.object3D.position.x;
+                const relativeDist = (otherPos - myPos) * this.data.dir; // Positive = Ahead
+
+                if (relativeDist > 0 && relativeDist < distToCarAhead) {
+                    distToCarAhead = relativeDist;
+                }
+            }
+        });
+        return distToCarAhead;
+      },
+
+      tick(t, dt) {
+        const delta = dt / 1000;
+        const p = this.el.object3D.position;
+
+        // --- PHASE 1: APPROACH ---
+        if (this.state === 'driving' || this.state === 'queued') {
+            const distAhead = this.checkTrafficAhead();
+            
+            // Queue Logic: Stop if car ahead is < 8m
+            if (distAhead < 8.0) {
+                this.state = 'queued';
+                return;
+            } else {
+                this.state = 'driving';
+            }
+
+            // Stop Line Logic
+            const currentPos = (this.data.axis==='z') ? p.z : p.x;
+            if (Math.abs(currentPos) <= this.stopLine) {
+                // Snap to line
+                if (this.data.axis==='z') p.z = this.stopLine * -this.data.dir;
+                else p.x = this.stopLine * -this.data.dir;
+                
+                this.state = 'arriving'; // Transition state to ensure full stop
+                
+                // Simulate "Looking both ways" delay (0.5s) before registering
+                setTimeout(() => {
+                    if(this.el.parentNode) { // Check if still exists
+                        this.state = 'waiting';
+                        this.el.sceneEl.systems['traffic-controller'].requestEntry(this.el);
+                    }
+                }, 500);
+                return;
+            }
+
+            // Move Forward
+            const move = this.data.dir * this.data.speed * delta;
+            if (this.data.axis==='z') p.z += move;
+            else p.x += move;
+        }
+
+        // --- PHASE 2: CROSSING ---
+        else if (this.state === 'crossing') {
+            const crossSpeed = 8.0; // Slightly faster in intersection to clear it
+
+            if (this.intention === 'straight') {
+                this.el.object3D.translateZ(crossSpeed * delta);
+            } 
+            else {
+                // Turn Logic
+                const turnSpeed = (Math.PI / 2) * delta * 0.9; 
+                this.turnProgress += turnSpeed;
+
+                this.el.object3D.translateZ(crossSpeed * delta);
+                
+                if (this.intention === 'right') this.el.object3D.rotateY(-turnSpeed);
+                else this.el.object3D.rotateY(turnSpeed * 0.8);
+
+                if (this.turnProgress >= Math.PI / 2) {
+                    this.finalizeTurn();
+                }
+            }
+
+            // Clearance Check (> 10m from center)
+            const distFromCenter = Math.sqrt(p.x*p.x + p.z*p.z);
+            if (distFromCenter > 10) {
+                // Tell system we are clear so next car can go
+                this.el.sceneEl.systems['traffic-controller'].reportClear(this.el);
+                if (this.intention === 'straight') this.state = 'departing';
+            }
+        }
+
+        // --- PHASE 3: DEPARTING ---
+        else if (this.state === 'departing') {
+            this.el.object3D.translateZ(this.data.speed * delta);
+            // Despawn when far away
+            if (Math.abs(p.x) > 70 || Math.abs(p.z) > 70) {
+                this.el.remove();
+            }
+        }
+      },
+
+      finalizeTurn() {
+        // Snap to 90 degrees
+        const y = this.el.object3D.rotation.y;
+        const snapped = Math.round(y / (Math.PI/2)) * (Math.PI/2);
+        this.el.object3D.rotation.y = snapped;
+        this.state = 'departing';
+      }
+    });
+
+    /* ======================================================================
+       SCENE SETUP
+       ====================================================================== */
+    AFRAME.registerComponent('city-blocks', {
+      init() {
+        this.createBlock(-50, -14, -50, -14); 
+        this.createBlock( 14, 50, -50, -14);
+        this.createBlock(-50, -14,  14, 50);
+        this.createBlock( 14, 50,  14, 50);
+      },
+      createBlock(xMin, xMax, zMin, zMax) {
+        for (let x = xMin; x < xMax; x += 10) {
+          for (let z = zMin; z < zMax; z += 10) {
+            if (Math.random() > 0.5) continue; 
+            const h = 5 + Math.random() * 10;
+            const el = document.createElement('a-box');
+            el.setAttribute('position', `${x+5} ${h/2} ${z+5}`);
+            el.setAttribute('width', 9); el.setAttribute('depth', 9); el.setAttribute('height', h);
+            el.setAttribute('color', '#556');
+            el.setAttribute('shadow', 'cast:false; receive:true'); 
+            this.el.appendChild(el);
+          }
+        }
+      }
+    });
+
+    AFRAME.registerComponent('stop-sign', {
+       schema: { rot: {type:'number'} },
+       init() {
+         const pole = document.createElement('a-cylinder');
+         pole.setAttribute('color','gray'); pole.setAttribute('radius',0.05); pole.setAttribute('height',2); pole.setAttribute('position','0 1 0');
+         const sign = document.createElement('a-circle');
+         sign.setAttribute('color','red'); sign.setAttribute('radius',0.4); sign.setAttribute('position','0 2 0.06'); sign.setAttribute('side','double');
+         this.el.appendChild(pole); this.el.appendChild(sign);
+         this.el.object3D.rotation.y = this.data.rot * (Math.PI/180);
+       }
+    });
+  </script>
+</head>
+
+<body style="margin:0; background-color: #1a2330;">
+  <a-scene background="color: #2c3e50" traffic-controller car-spawner shadow="type: pcfsoft">
+
+    <a-entity position="-30 20 -30">
+       <a-sphere radius="4" color="#ff9a4d" material="shader:flat; fog:false"></a-sphere>
+       <a-entity light="type: directional; color: #ffae42; intensity: 1.2; castShadow:true"></a-entity>
+    </a-entity>
+    <a-entity light="type: ambient; color: #6a5acd; intensity: 0.8"></a-entity>
+    <a-sky material="shader: gradient; topColor: #2c3e50; bottomColor: #e67e22"></a-sky> 
+
+    <a-plane rotation="-90 0 0" width="150" height="150" color="#2c3e50"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.02 0" width="8" height="100" color="#111"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.03 0" width="100" height="8" color="#111"></a-plane>
+    
+    <a-plane rotation="-90 0 0" position="0 0.04 -6.5" width="8" height="0.6" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="0 0.04  6.5" width="8" height="0.6" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position="-6.5 0.04 0" width="0.6" height="8" color="white"></a-plane>
+    <a-plane rotation="-90 0 0" position=" 6.5 0.04 0" width="0.6" height="8" color="white"></a-plane>
+
+    <a-entity city-blocks></a-entity>
+    <a-entity stop-sign="rot:0" position="-6.5 0 -6.5"></a-entity>
+    <a-entity stop-sign="rot:-90" position="6.5 0 -6.5"></a-entity>
+    <a-entity stop-sign="rot:180" position="6.5 0 6.5"></a-entity>
+    <a-entity stop-sign="rot:90" position="-6.5 0 6.5"></a-entity>
+
+    <a-entity id="rig" position="-14 2 14" rotation="0 -45 0" wasd-controls>
+      <a-entity camera look-controls></a-entity>
+    </a-entity>
+
+  </a-scene>
+</body>
+</html>
